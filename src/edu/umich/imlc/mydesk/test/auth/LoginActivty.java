@@ -13,7 +13,6 @@ import android.content.DialogInterface;
 import android.content.DialogInterface.OnDismissListener;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.os.Bundle;
 
 public class LoginActivty extends Activity implements LoginCallback
 {

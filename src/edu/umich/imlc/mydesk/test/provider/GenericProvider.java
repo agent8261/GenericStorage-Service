@@ -494,7 +494,7 @@ public class GenericProvider extends ContentProvider
           Context.MODE_PRIVATE);
     }
     String s = prefs.getString(GenericContract.PREFS_ACCOUNT_NAME, "");
-    Log.i(TAG, String.format("User: ", s));
+    Log.i(TAG, String.format("User: %s", s));
     return s;
   }// getUser
 
