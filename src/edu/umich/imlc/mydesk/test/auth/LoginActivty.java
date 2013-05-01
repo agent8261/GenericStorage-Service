@@ -3,6 +3,7 @@ package edu.umich.imlc.mydesk.test.auth;
 import edu.umich.imlc.mydesk.cloud.android.auth.LoginCallback;
 import edu.umich.imlc.mydesk.cloud.android.auth.LoginUtilities;
 import edu.umich.imlc.mydesk.test.common.GenericContract;
+import edu.umich.imlc.mydesk.test.common.Utils;
 import android.accounts.Account;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -12,6 +13,7 @@ import android.content.DialogInterface;
 import android.content.DialogInterface.OnDismissListener;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.Bundle;
 
 public class LoginActivty extends Activity implements LoginCallback
 {
@@ -27,6 +29,7 @@ public class LoginActivty extends Activity implements LoginCallback
   @Override
   protected void onActivityResult(int requestCode, int resultCode, Intent data)
   {
+    Utils.printMethodName();
     if( (resultCode == Activity.RESULT_OK) )
     {
       prog = new ProgressDialog(this);
@@ -47,18 +50,25 @@ public class LoginActivty extends Activity implements LoginCallback
   protected void onStart()
   {
     super.onStart();
-    if( getSharedPrefs().contains(GenericContract.PREFS_ACCOUNT_NAME) )
+    Utils.printMethodName();
+    Intent i = getIntent();
+    
+    if(!i.getBooleanExtra(GenericContract.KEY_CHOOSE_ACCOUNT, false))
     {
-      // account verified
-      showAccountVerified(getSharedPrefs().getString(
-          GenericContract.PREFS_ACCOUNT_NAME, ""));
-      return;
-    }
+      if( getSharedPrefs().contains(GenericContract.PREFS_ACCOUNT_NAME) )
+      {
+        // account verified
+        showAccountVerified(getSharedPrefs().getString(
+            GenericContract.PREFS_ACCOUNT_NAME, ""));
+        return;
+      }      
+    }    
     LoginUtilities.startAccountPicker(this, true);
   }
 
   private SharedPreferences getSharedPrefs()
   {
+    Utils.printMethodName();
     if( prefs == null )
     {
       prefs = getSharedPreferences(GenericContract.SHARED_PREFS, MODE_PRIVATE);
@@ -69,6 +79,7 @@ public class LoginActivty extends Activity implements LoginCallback
   @Override
   public void onSuccess(final String accountName)
   {
+    Utils.printMethodName();
     getSharedPrefs().edit()
         .putString(GenericContract.PREFS_ACCOUNT_NAME, accountName).apply();
     Account account = new Account(accountName, LoginUtilities.googleAccountType);
@@ -89,6 +100,7 @@ public class LoginActivty extends Activity implements LoginCallback
   @Override
   public void onFailure(final Exception e)
   {
+    Utils.printMethodName();
     e.printStackTrace();
     runOnUiThread(new Runnable()
     {
