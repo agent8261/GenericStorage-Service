@@ -45,13 +45,13 @@ public class GenericSyncService extends Service
   @Override
   public IBinder onBind(Intent arg0)
   {
-    Util.printMethodName();
+    Util.printMethodName(TAG);
     return getSyncAdapter().getSyncAdapterBinder();
   }
 
   private GenericSyncAdapter getSyncAdapter()
   {
-    Util.printMethodName();
+    Util.printMethodName(TAG);
     if( syncAdapter == null )
     {
       syncAdapter = new GenericSyncAdapter(this);
@@ -72,7 +72,7 @@ public class GenericSyncService extends Service
     public void onPerformSync(Account account, Bundle extras, String authority,
         ContentProviderClient provider, SyncResult syncResult)
     {
-      Util.printMethodName();
+      Util.printMethodName(TAG);
       try
       {
         if( !NetUtil.isLoggedIn() )
@@ -121,7 +121,7 @@ public class GenericSyncService extends Service
     private Map<String, MetaData> getMetaDatas(Account account,
         ContentProviderClient provider) throws RemoteException
     {
-      Util.printMethodName();
+      Util.printMethodName(TAG);
       Cursor c = provider.query(GenericContract.URI_FILES.buildUpon()
           .appendQueryParameter(MetaDataColumns.OWNER, account.name).build(),
           MetaDataProjections.METADATA, MetaDataColumns.DIRTY + "=1", null,
@@ -157,7 +157,7 @@ public class GenericSyncService extends Service
     public SyncTodos(Map<String, MetaData> local,
         List<FileMetaData_ShortInfo_PB> backend)
     {
-      Util.printMethodName();
+      Util.printMethodName(TAG);
       Log.i(TAG, "local:\n"+local);
       Log.i(TAG, "Backend:\n"+backend);
       conflicts = new ArrayList<GenericContract.MetaData>();
@@ -210,7 +210,7 @@ public class GenericSyncService extends Service
     public void addPullOperations(
         ArrayList<ContentProviderOperation> operationList, Context c)
     {
-      Util.printMethodName();
+      Util.printMethodName(TAG);
       for( MetaData m : toPull )
       {
         try
@@ -247,7 +247,7 @@ public class GenericSyncService extends Service
         ArrayList<ContentProviderOperation> operationList, String owner,
         Context c)
     {
-      Util.printMethodName();
+      Util.printMethodName(TAG);
       Uri uri = GenericContract.URI_FILES.buildUpon()
           .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER, "true")
           .build();
@@ -285,7 +285,7 @@ public class GenericSyncService extends Service
     public void addcreateOperations(
         ArrayList<ContentProviderOperation> operationList)
     {
-      Util.printMethodName();
+      Util.printMethodName(TAG);
       for( MetaData m : toCreate )
       {
         try
@@ -313,7 +313,7 @@ public class GenericSyncService extends Service
     public void addLockOperations(
         ArrayList<ContentProviderOperation> operationList)
     {
-      Util.printMethodName();
+      Util.printMethodName(TAG);
       for( MetaData m : toCreate )
       {
         ContentProviderOperation.Builder b = ContentProviderOperation
@@ -345,7 +345,7 @@ public class GenericSyncService extends Service
     public void addPushOperations(
         ArrayList<ContentProviderOperation> operationList)
     {
-      Util.printMethodName();
+      Util.printMethodName(TAG);
       for( MetaData m : toPush )
       {
         try
@@ -372,6 +372,7 @@ public class GenericSyncService extends Service
 
     private Date translateDate(Date_PB dPB)
     {
+      Utils.printMethodName();
       Calendar c = Calendar.getInstance();
       c.set(dPB.getYear() - 1900, dPB.getMonth() - 1, dPB.getDay(), dPB
           .getTime().getHours(), dPB.getTime().getMinutes(), dPB.getTime()

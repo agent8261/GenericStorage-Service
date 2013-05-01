@@ -30,6 +30,7 @@ import android.database.sqlite.SQLiteQueryBuilder;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
 import android.support.v4.app.NotificationCompat;
+import android.util.Log;
 import edu.umich.imlc.mydesk.test.common.GenericContract.*;
 
 public class GenericProvider extends ContentProvider
@@ -326,6 +327,7 @@ public class GenericProvider extends ContentProvider
   ContentValues prepareMetaDataUpdate(Uri newUri, long newSequence,
       String newTimestamp)
   {
+    Utils.printMethodName();
     ContentValues v = new ContentValues();
     v.put(MetaDataColumns.DIRTY, true);
     v.put(MetaDataColumns.URI, newUri.toString());
@@ -444,6 +446,7 @@ public class GenericProvider extends ContentProvider
 
   private Uri newBackendFile(ContentValues values)
   {
+    Utils.printMethodName();
     genericDb.newFile(values);
     MetaData file = genericDb.getFileMetaData(values
         .getAsString(MetaDataColumns.FILE_ID));
@@ -490,7 +493,9 @@ public class GenericProvider extends ContentProvider
       prefs = getContext().getSharedPreferences(GenericContract.SHARED_PREFS,
           Context.MODE_PRIVATE);
     }
-    return prefs.getString(GenericContract.PREFS_ACCOUNT_NAME, "");
+    String s = prefs.getString(GenericContract.PREFS_ACCOUNT_NAME, "");
+    Log.i(TAG, String.format("User: ", s));
+    return s;
   }// getUser
 
   // ---------------------------------------------------------------------------
@@ -506,6 +511,7 @@ public class GenericProvider extends ContentProvider
    */
   private boolean testQueryParam(String param, Uri uri)
   {
+    Utils.printMethodName();
     final String queryParam = uri.getQueryParameter(param);
     return queryParam != null && queryParam.equals("true");
   }
