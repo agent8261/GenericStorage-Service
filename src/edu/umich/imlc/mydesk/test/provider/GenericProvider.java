@@ -11,9 +11,11 @@ import java.util.Date;
 import java.util.UUID;
 
 import edu.umich.imlc.mydesk.test.common.GenericContract;
+import edu.umich.imlc.mydesk.test.common.GenericContract.MetaDataColumns;
 import edu.umich.imlc.mydesk.test.common.Utils;
 import edu.umich.imlc.mydesk.test.db.GenericDb;
 import edu.umich.imlc.mydesk.test.service.ConflictActivity;
+import edu.umich.imlc.mydesk.test.service.GenericSyncService;
 
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -42,7 +44,6 @@ public class GenericProvider extends ContentProvider
   private static final int CURRENT_ACCOUNT = 120;
   private static final UriMatcher sURIMatcher = new UriMatcher(
       UriMatcher.NO_MATCH);
-  private static final int NOTIFICATION_CONFLICT = 1010;
   static
   {
     sURIMatcher.addURI(GenericContract.AUTHORITY, "files", FILES);
@@ -58,7 +59,7 @@ public class GenericProvider extends ContentProvider
 
   public GenericProvider()
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
   }
 
   // ---------------------------------------------------------------------------
@@ -66,7 +67,7 @@ public class GenericProvider extends ContentProvider
   @Override
   public int delete(Uri arg0, String arg1, String[] arg2)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     throw new UnsupportedOperationException("delete not supported");
   }
 
@@ -75,7 +76,7 @@ public class GenericProvider extends ContentProvider
   @Override
   public String getType(Uri uri)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     switch ( sURIMatcher.match(uri) )
     {
       case FILE:
@@ -100,7 +101,7 @@ public class GenericProvider extends ContentProvider
   @Override
   public Uri insert(Uri uri, ContentValues values)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     switch ( sURIMatcher.match(uri) )
     {
       case FILES:
@@ -141,7 +142,7 @@ public class GenericProvider extends ContentProvider
   @Override
   public boolean onCreate()
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     genericDb = new GenericDb(getContext());
     return true;
   }
@@ -152,7 +153,7 @@ public class GenericProvider extends ContentProvider
   public Cursor query(Uri uri, String[] projection, String selection,
       String[] selectionArgs, String sortOrder)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     Cursor c;
     switch ( sURIMatcher.match(uri) )
     {
@@ -192,30 +193,31 @@ public class GenericProvider extends ContentProvider
   public int update(Uri uri, ContentValues values, String selection,
       String[] selectionArgs)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     switch ( sURIMatcher.match(uri) )
     {
       case FILE:
-        genericDb.getWritableDatabase().beginTransaction();
+        if( testQueryParam(GenericContract.UNLOCK_FILE, uri) )
+        {
+          return updateAndSetLock(uri.getLastPathSegment(), false, values);
+        }
+        if( testQueryParam(GenericContract.LOCK_FILE, uri) )
+        {
+          return updateAndSetLock(uri.getLastPathSegment(), true, values);
+        }
+        // no special flag set in uri
         try
         {
-          if( testQueryParam(GenericContract.LOCK_FILE, uri) )
+          genericDb.getWritableDatabase().beginTransaction();
+          boolean conflict = save(uri, values);
+          genericDb.getWritableDatabase().setTransactionSuccessful();
+          getContext().getContentResolver().notifyChange(uri, null,
+              !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri));
+          if( conflict )
           {
-            MetaData m = genericDb.getFileMetaData(uri.getLastPathSegment());
-            genericDb.updateFile(m, values);
-            genericDb.getWritableDatabase().setTransactionSuccessful();
-          }
-          else
-          {
-            boolean conflict = save(uri, values);
-            genericDb.getWritableDatabase().setTransactionSuccessful();
-            getContext().getContentResolver().notifyChange(uri, null,
-                !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri));
-            if( conflict )
-            {
-              displayConflictNotification();
-              return 0;
-            }
+            GenericSyncService.displayConflictNotification(getContext()
+                .getApplicationContext());
+            return 0;
           }
           return 1;
         }
@@ -225,12 +227,13 @@ public class GenericProvider extends ContentProvider
         }
       case FILES:
       {
-        if( testQueryParam(GenericContract.CLEAN_FILE, uri) )
+        if( testQueryParam(GenericContract.UNLOCK_FILE, uri) )
         {
-          ContentValues v = new ContentValues();
-          v.put(MetaDataColumns.LOCKED, false);
-          return genericDb.getWritableDatabase()
-              .update(Tables.METADATA, v, null, null);
+          return setLocks(uri.getQueryParameter(MetaDataColumns.OWNER), false);
+        }
+        if( testQueryParam(GenericContract.LOCK_FILE, uri) )
+        {
+          return setLocks(uri.getQueryParameter(MetaDataColumns.OWNER), true);
         }
       }
       default:
@@ -241,9 +244,30 @@ public class GenericProvider extends ContentProvider
 
   // ---------------------------------------------------------------------------
 
+  // toggles the locked flag of all files owned by owner
+  private int setLocks(String owner, boolean locked)
+  {
+    ContentValues v = new ContentValues();
+    v.put(MetaDataColumns.LOCKED, locked);
+    String[] whereArgs = { owner };
+    return genericDb.getWritableDatabase().update(Tables.METADATA, v,
+        MetaDataColumns.OWNER + "=?", whereArgs);
+  }// setLocks
+
+  // ---------------------------------------------------------------------------
+
+  private int updateAndSetLock(String fileId, boolean locked,
+      ContentValues values)
+  {
+    values.put(MetaDataColumns.LOCKED, locked);
+    return genericDb.updateFile(genericDb.getFileMetaData(fileId), values);
+  }// setLock
+
+  // ---------------------------------------------------------------------------
+
   private boolean save(Uri uri, ContentValues values)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     try
     {
       // remember the old file and check if it exists
@@ -252,6 +276,14 @@ public class GenericProvider extends ContentProvider
       {
         throw new IllegalArgumentException("file id doesn't exist");
       }
+      if( fileMetaData.locked()
+          && !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri) )
+      {
+        // file is locked and someone other than the sync adapter is trying to
+        // access it
+        throw new IllegalArgumentException(
+            Exceptions.FILELOCKEDEXCEPTION.name());
+      }
       Uri oldFile = fileMetaData.fileUri();
 
       File fromFile = new File(Uri.parse(
@@ -259,8 +291,8 @@ public class GenericProvider extends ContentProvider
       File toFile = null;
       long newSeq;
       String newTime;
-      boolean fromBackend = values
-          .getAsBoolean(GenericContract.KEY_UPDATE_BACKEND);
+      boolean fromBackend = testQueryParam(
+          GenericContract.CALLER_IS_SYNC_ADAPTER, uri);
       if( fromBackend )
       {
         // new file already in internal storage
@@ -272,6 +304,7 @@ public class GenericProvider extends ContentProvider
       }
       else
       {
+
         // check for ownership
         String currentUser = getUser();
         if( currentUser.isEmpty() )
@@ -327,7 +360,7 @@ public class GenericProvider extends ContentProvider
   ContentValues prepareMetaDataUpdate(Uri newUri, long newSequence,
       String newTimestamp)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     ContentValues v = new ContentValues();
     v.put(MetaDataColumns.DIRTY, true);
     v.put(MetaDataColumns.URI, newUri.toString());
@@ -347,7 +380,7 @@ public class GenericProvider extends ContentProvider
   public ParcelFileDescriptor openFile(Uri uri, String mode)
       throws FileNotFoundException
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     switch ( sURIMatcher.match(uri) )
     {
       case FILE:
@@ -357,13 +390,20 @@ public class GenericProvider extends ContentProvider
         throw new IllegalArgumentException("Unknown URI: " + uri.toString());
     }
 
-    Uri fileUri = genericDb.getFileUri(uri.getLastPathSegment());
-    if( fileUri == null )
+    MetaData file = genericDb.getFileMetaData(uri.getLastPathSegment());
+    if( file == null )
     {
       throw new FileNotFoundException("File Id doesn't exist");
     }
+    if( file.locked()
+        && !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri) )
+    {
+      // file is locked and someone other than the sync adapter is trying to
+      // access it
+      throw new IllegalArgumentException(Exceptions.FILELOCKEDEXCEPTION.name());
+    }
 
-    File privateFile = new File(fileUri.getPath());
+    File privateFile = new File(file.fileUri().getPath());
     if( !privateFile.exists() )
     {
       throw new FileNotFoundException("File doesn't exist on disk");
@@ -376,7 +416,7 @@ public class GenericProvider extends ContentProvider
 
   private String getRandomFileId()
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     return UUID.randomUUID().toString() + "__" + UUID.randomUUID().toString();
   }// getRandomFileId
 
@@ -384,7 +424,7 @@ public class GenericProvider extends ContentProvider
 
   private void copyFile(File from, File to) throws IOException
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     FileInputStream is = new FileInputStream(from);
     FileOutputStream os = new FileOutputStream(to);
     try
@@ -405,7 +445,7 @@ public class GenericProvider extends ContentProvider
 
   private Uri newLocalFile(Uri uri, ContentValues values) throws IOException
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     String owner = getUser();
     if( owner.isEmpty() )
     {
@@ -446,7 +486,7 @@ public class GenericProvider extends ContentProvider
 
   private Uri newBackendFile(ContentValues values)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     genericDb.newFile(values);
     MetaData file = genericDb.getFileMetaData(values
         .getAsString(MetaDataColumns.FILE_ID));
@@ -455,39 +495,9 @@ public class GenericProvider extends ContentProvider
 
   // ---------------------------------------------------------------------------
 
-  private void displayConflictNotification()
-  {
-    Utils.printMethodName();
-    NotificationCompat.Builder mBuilder = new NotificationCompat.Builder(
-        getContext()).setContentTitle("MyDesk Conflic")
-        .setContentText("Tap to resolve conflict")
-        .setSmallIcon(android.R.drawable.stat_notify_sync_noanim);
-    // Creates an explicit intent for an Activity in your app
-    Intent resultIntent = new Intent(getContext(), ConflictActivity.class);
-
-    // The stack builder object will contain an artificial back stack for the
-    // started Activity.
-    // This ensures that navigating backward from the Activity leads out of
-    // your application to the Home screen.
-    TaskStackBuilder stackBuilder = TaskStackBuilder.create(getContext());
-    // Adds the back stack for the Intent (but not the Intent itself)
-    stackBuilder.addParentStack(ConflictActivity.class);
-    // Adds the Intent that starts the Activity to the top of the stack
-    stackBuilder.addNextIntent(resultIntent);
-    PendingIntent resultPendingIntent = stackBuilder.getPendingIntent(0,
-        PendingIntent.FLAG_UPDATE_CURRENT);
-    mBuilder.setContentIntent(resultPendingIntent);
-    NotificationManager mNotificationManager = (NotificationManager) getContext()
-        .getSystemService(Context.NOTIFICATION_SERVICE);
-    // mId allows you to update the notification later on.
-    mNotificationManager.notify(NOTIFICATION_CONFLICT, mBuilder.build());
-  }// displayConflictNotification
-
-  // ---------------------------------------------------------------------------
-
   private String getUser()
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     if( prefs == null )
     {
       prefs = getContext().getSharedPreferences(GenericContract.SHARED_PREFS,
@@ -511,7 +521,7 @@ public class GenericProvider extends ContentProvider
    */
   private boolean testQueryParam(String param, Uri uri)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     final String queryParam = uri.getQueryParameter(param);
     return queryParam != null && queryParam.equals("true");
   }

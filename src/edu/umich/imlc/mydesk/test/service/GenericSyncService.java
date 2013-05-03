@@ -23,7 +23,10 @@ import edu.umich.imlc.mydesk.test.common.Utils;
 import edu.umich.imlc.protocolbuffer.general.ProtocolBufferTransport.Date_PB;
 
 import android.accounts.Account;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
+import android.app.TaskStackBuilder;
 import android.content.AbstractThreadedSyncAdapter;
 import android.content.ContentProviderClient;
 import android.content.ContentProviderOperation;
@@ -35,12 +38,14 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.support.v4.app.NotificationCompat;
 import android.util.Log;
 
 public class GenericSyncService extends Service
 {
   private static final String TAG = "GenericSync";
   private static GenericSyncAdapter syncAdapter = null;
+  private static final int NOTIFICATION_CONFLICT = 1010;
 
   @Override
   public IBinder onBind(Intent arg0)
@@ -59,13 +64,41 @@ public class GenericSyncService extends Service
     return syncAdapter;
   }
 
+  public static void displayConflictNotification(Context context)
+  {
+    Utils.printMethodName(TAG);
+    NotificationCompat.Builder mBuilder = new NotificationCompat.Builder(
+        context).setContentTitle("MyDesk Conflict")
+        .setContentText("Tap to resolve conflict")
+        .setSmallIcon(android.R.drawable.stat_notify_sync_noanim);
+    // Creates an explicit intent for an Activity in your app
+    Intent resultIntent = new Intent(context, ConflictActivity.class);
+
+    // The stack builder object will contain an artificial back stack for the
+    // started Activity.
+    // This ensures that navigating backward from the Activity leads out of
+    // your application to the Home screen.
+    TaskStackBuilder stackBuilder = TaskStackBuilder.create(context);
+    // Adds the back stack for the Intent (but not the Intent itself)
+    stackBuilder.addParentStack(ConflictActivity.class);
+    // Adds the Intent that starts the Activity to the top of the stack
+    stackBuilder.addNextIntent(resultIntent);
+    PendingIntent resultPendingIntent = stackBuilder.getPendingIntent(0,
+        PendingIntent.FLAG_UPDATE_CURRENT);
+    mBuilder.setContentIntent(resultPendingIntent);
+    NotificationManager mNotificationManager = (NotificationManager) context
+        .getSystemService(Context.NOTIFICATION_SERVICE);
+    // mId allows you to update the notification later on.
+    mNotificationManager.notify(NOTIFICATION_CONFLICT, mBuilder.build());
+  }// displayConflictNotification
+
   private static class GenericSyncAdapter extends AbstractThreadedSyncAdapter
   {
 
     public GenericSyncAdapter(Context context)
     {
       super(context, true);
-      Utils.printMethodName();
+      Utils.printMethodName(TAG);
     }
 
     @Override
@@ -81,12 +114,12 @@ public class GenericSyncService extends Service
               .doLogin();
         }
 
-        SyncTodos todos = new SyncTodos(getMetaDatas(account, provider),
+        SyncTodos todos = new SyncTodos(getAndLockMetaDatas(account, provider),
             NetworkOps.getListMetaData());
 
         ArrayList<ContentProviderOperation> operationList = new ArrayList<ContentProviderOperation>();
 
-        todos.addLockOperations(operationList);
+        todos.addUnlockUnrelatedOperations(operationList);
         provider.applyBatch(operationList);
         operationList.clear();
 
@@ -109,7 +142,8 @@ public class GenericSyncService extends Service
         operationList.clear();
 
         provider.update(GenericContract.URI_FILES.buildUpon()
-            .appendQueryParameter(GenericContract.CLEAN_FILE, "true").build(),
+            .appendQueryParameter(MetaDataColumns.OWNER, account.name)
+            .appendQueryParameter(GenericContract.UNLOCK_FILE, "true").build(),
             null, null, null);
       }
       catch( Exception e )
@@ -118,14 +152,17 @@ public class GenericSyncService extends Service
       }
     }
 
-    private Map<String, MetaData> getMetaDatas(Account account,
+    private Map<String, MetaData> getAndLockMetaDatas(Account account,
         ContentProviderClient provider) throws RemoteException
     {
       Util.printMethodName(TAG);
+      provider.update(GenericContract.URI_FILES.buildUpon()
+          .appendQueryParameter(MetaDataColumns.OWNER, account.name)
+          .appendQueryParameter(GenericContract.LOCK_FILE, "true").build(),
+          null, null, null);
       Cursor c = provider.query(GenericContract.URI_FILES.buildUpon()
           .appendQueryParameter(MetaDataColumns.OWNER, account.name).build(),
-          MetaDataProjections.METADATA, MetaDataColumns.DIRTY + "=1", null,
-          null);
+          MetaDataProjections.METADATA, null, null, null);
       try
       {
         Map<String, MetaData> result = new HashMap<String, GenericContract.MetaData>();
@@ -148,6 +185,7 @@ public class GenericSyncService extends Service
 
   private static class SyncTodos
   {
+    private ArrayList<MetaData> untouched;
     private ArrayList<MetaData> conflicts;
     private ArrayList<MetaData> toCreate;
     private ArrayList<MetaData> toPush;
@@ -158,8 +196,9 @@ public class GenericSyncService extends Service
         List<FileMetaData_ShortInfo_PB> backend)
     {
       Util.printMethodName(TAG);
-      Log.i(TAG, "local:\n"+local);
-      Log.i(TAG, "Backend:\n"+backend);
+      Log.i(TAG, "local:\n" + local);
+      Log.i(TAG, "Backend:\n" + backend);
+      untouched = new ArrayList<GenericContract.MetaData>();
       conflicts = new ArrayList<GenericContract.MetaData>();
       toCreate = new ArrayList<GenericContract.MetaData>();
       toPush = new ArrayList<GenericContract.MetaData>();
@@ -178,10 +217,12 @@ public class GenericSyncService extends Service
           if( m.sequenceNumber() <= b.getSequenceNumber() )
           {
             conflicts.add(m);
+            continue;
           }
           else
           {
             toPush.add(m);
+            continue;
           }
         }
         else
@@ -189,22 +230,26 @@ public class GenericSyncService extends Service
           if( m.sequenceNumber() < b.getSequenceNumber() )
           {
             toPull.add(m);
+            continue;
           }
         }
+        untouched.add(m);
       }
       for( MetaData m : local.values() )
       {
         if( m.dirty() )
         {
           toCreate.add(m);
+          continue;
         }
+        untouched.add(m);
       }
-      
-      Log.i(TAG, "conflicts:\n"+conflicts);
+      Log.i(TAG, "conflicts:\n" + conflicts);
       Log.i(TAG, "toCreate:\n" + toCreate);
-      Log.i(TAG, "toPush:\n"+ toPush);
-      Log.i(TAG, "toPull:\n"+ toPull);
-      Log.i(TAG, "newFiles:\n"+ newFiles);
+      Log.i(TAG, "toPush:\n" + toPush);
+      Log.i(TAG, "toPull:\n" + toPull);
+      Log.i(TAG, "newFiles:\n" + newFiles);
+      Log.i(TAG, "untouched:\n" + untouched);
     }
 
     public void addPullOperations(
@@ -229,7 +274,6 @@ public class GenericSyncService extends Service
               .withValue(GenericContract.KEY_UPDATE_OLD_SEQUENCE,
                   m.sequenceNumber())
               .withValue(MetaDataColumns.SEQUENCE, newSeq)
-              .withValue(GenericContract.KEY_UPDATE_BACKEND, true)
               .withValue(
                   MetaDataColumns.TIME,
                   DateFormat.getDateTimeInstance().format(
@@ -298,7 +342,7 @@ public class GenericSyncService extends Service
                   .appendPath(m.fileId())
                   .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
                       "true")
-                  .appendQueryParameter(GenericContract.CLEAN_FILE, "true")
+                  .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
                   .build());
           b.withValue(MetaDataColumns.SEQUENCE, m_pb.getSequenceNumber());
           operationList.add(b.build());
@@ -310,11 +354,11 @@ public class GenericSyncService extends Service
       }
     }
 
-    public void addLockOperations(
+    public void addUnlockUnrelatedOperations(
         ArrayList<ContentProviderOperation> operationList)
     {
       Util.printMethodName(TAG);
-      for( MetaData m : toCreate )
+      for( MetaData m : untouched )
       {
         ContentProviderOperation.Builder b = ContentProviderOperation
             .newUpdate(GenericContract.URI_FILES
@@ -322,22 +366,9 @@ public class GenericSyncService extends Service
                 .appendPath(m.fileId())
                 .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
                     "true")
-                .appendQueryParameter(GenericContract.LOCK_FILE, "true")
+                .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
                 .build());
-        b.withValue(MetaDataColumns.LOCKED, true);
-        operationList.add(b.build());
-      }
-      for( MetaData m : toPush )
-      {
-        ContentProviderOperation.Builder b = ContentProviderOperation
-            .newUpdate(GenericContract.URI_FILES
-                .buildUpon()
-                .appendPath(m.fileId())
-                .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
-                    "true")
-                .appendQueryParameter(GenericContract.LOCK_FILE, "true")
-                .build());
-        b.withValue(MetaDataColumns.LOCKED, true);
+        b.withValue(MetaDataColumns.SEQUENCE, m.sequenceNumber());
         operationList.add(b.build());
       }
     }
@@ -358,9 +389,10 @@ public class GenericSyncService extends Service
                   .appendPath(m.fileId())
                   .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
                       "true")
-                  .appendQueryParameter(GenericContract.CLEAN_FILE, "true")
+                  .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
                   .build());
           b.withValue(MetaDataColumns.SEQUENCE, m_pb.getSequenceNumber());
+          b.withValue(MetaDataColumns.DIRTY, false);
           operationList.add(b.build());
         }
         catch( Exception e )
@@ -372,7 +404,7 @@ public class GenericSyncService extends Service
 
     private Date translateDate(Date_PB dPB)
     {
-      Utils.printMethodName();
+      Utils.printMethodName(TAG);
       Calendar c = Calendar.getInstance();
       c.set(dPB.getYear() - 1900, dPB.getMonth() - 1, dPB.getDay(), dPB
           .getTime().getHours(), dPB.getTime().getMinutes(), dPB.getTime()

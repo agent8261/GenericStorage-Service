@@ -16,6 +16,7 @@ import android.content.SharedPreferences;
 
 public class LoginActivty extends Activity implements LoginCallback
 {
+  public static final String TAG = "LoginActivity";
   ProgressDialog prog;
   SharedPreferences prefs;
 
@@ -28,7 +29,7 @@ public class LoginActivty extends Activity implements LoginCallback
   @Override
   protected void onActivityResult(int requestCode, int resultCode, Intent data)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     if( (resultCode == Activity.RESULT_OK) )
     {
       prog = new ProgressDialog(this);
@@ -49,7 +50,7 @@ public class LoginActivty extends Activity implements LoginCallback
   protected void onStart()
   {
     super.onStart();
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     Intent i = getIntent();
     
     if(!i.getBooleanExtra(GenericContract.KEY_CHOOSE_ACCOUNT, false))
@@ -67,7 +68,7 @@ public class LoginActivty extends Activity implements LoginCallback
 
   private SharedPreferences getSharedPrefs()
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     if( prefs == null )
     {
       prefs = getSharedPreferences(GenericContract.SHARED_PREFS, MODE_PRIVATE);
@@ -78,7 +79,7 @@ public class LoginActivty extends Activity implements LoginCallback
   @Override
   public void onSuccess(final String accountName)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     getSharedPrefs().edit()
         .putString(GenericContract.PREFS_ACCOUNT_NAME, accountName).apply();
     Account account = new Account(accountName, LoginUtilities.googleAccountType);
@@ -99,7 +100,7 @@ public class LoginActivty extends Activity implements LoginCallback
   @Override
   public void onFailure(final Exception e)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     e.printStackTrace();
     runOnUiThread(new Runnable()
     {
@@ -115,7 +116,7 @@ public class LoginActivty extends Activity implements LoginCallback
 
   private void showAccountVerified(String accountName)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     AlertDialog.Builder aBuilder = new AlertDialog.Builder(this);
     aBuilder.setMessage("Account verified: " + accountName);
     aBuilder.setOnDismissListener(new OnDismissListener()
@@ -131,7 +132,7 @@ public class LoginActivty extends Activity implements LoginCallback
   
   private void showVerifyFail(Throwable e)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     AlertDialog.Builder aBuilder = new AlertDialog.Builder(this);
     aBuilder.setMessage("Verify failed: " + e);
     aBuilder.setOnDismissListener(new OnDismissListener()

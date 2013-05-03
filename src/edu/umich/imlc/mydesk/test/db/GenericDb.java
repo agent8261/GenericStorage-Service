@@ -25,6 +25,7 @@ public class GenericDb extends SQLiteOpenHelper
       + MetaDataColumns.TIME + " TEXT, " + MetaDataColumns.SEQUENCE
       + " INTEGER NOT NULL DEFAULT '-1', " + MetaDataColumns.DIRTY
       + " INTEGER NOT NULL DEFAULT '0', " + MetaDataColumns.LOCKED
+      + " INTEGER NOT NULL DEFAULT '0', " + MetaDataColumns.CONFLICT
       + " INTEGER NOT NULL DEFAULT '0', " + "PRIMARY KEY(" + MetaDataColumns.ID
       + "))";
 
@@ -37,13 +38,20 @@ public class GenericDb extends SQLiteOpenHelper
       + " TEXT DEFAULT NULL, " + "PRIMARY KEY(" + LocalConflictColumns.ID
       + "))";
 
+  private static final String CREATE_TABLE_BACKEND_CONFLICTS = "CREATE TABLE "
+      + Tables.BACKEND_CONFLICTS + "(" + BackendConflictColumns.ID
+      + " INTEGER NOT NULL, " + BackendConflictColumns.FILE_ID
+      + " TEXT NOT NULL, " + BackendConflictColumns.RESOLVED
+      + " TEXT DEFAULT NULL, " + " PRIMARY KEY(" + BackendConflictColumns.ID
+      + "))";
+
   // ---------------------------------------------------------------------------
   // ---------------------------------------------------------------------------
 
   public GenericDb(Context context)
   {
     super(context, DB_NAME, null, DB_VERSION);
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
   }// ctor
 
   // ---------------------------------------------------------------------------
@@ -51,9 +59,10 @@ public class GenericDb extends SQLiteOpenHelper
   @Override
   public void onCreate(SQLiteDatabase db)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     db.execSQL(CREATE_TABLE_METADATA);
     db.execSQL(CREATE_TABLE_LOCAL_CONFLICTS);
+    db.execSQL(CREATE_TABLE_BACKEND_CONFLICTS);
   }// onCreate
 
   // ---------------------------------------------------------------------------
@@ -61,7 +70,7 @@ public class GenericDb extends SQLiteOpenHelper
   @Override
   public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     db.execSQL("DROP TABLE IF EXISTS " + Tables.METADATA);
     db.execSQL("DROP TABLE IF EXISTS " + Tables.LOCAL_CONFLICTS);
     onCreate(db);
@@ -71,7 +80,7 @@ public class GenericDb extends SQLiteOpenHelper
 
   public Cursor queryFile(String fileId, String[] projectionIn)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     SQLiteQueryBuilder queryBuilder = new SQLiteQueryBuilder();
 
     queryBuilder.setTables(Tables.METADATA);
@@ -90,7 +99,7 @@ public class GenericDb extends SQLiteOpenHelper
 
   public Uri getFileUri(String fileId)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     Uri result = null;
     Cursor c = null;
     String[] projectionIn = { MetaDataColumns.URI };
@@ -107,7 +116,7 @@ public class GenericDb extends SQLiteOpenHelper
 
   public MetaData getFileMetaData(String fileId)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     MetaData result = null;
     Cursor c = null;
     if( (c = queryFile(fileId, MetaDataProjections.METADATA)) != null )
@@ -122,7 +131,7 @@ public class GenericDb extends SQLiteOpenHelper
 
   public int updateFile(MetaData file, ContentValues values)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     String[] whereArgs = { file.fileId(),
         Integer.toString(file.sequenceNumber()) };
     return getWritableDatabase().update(Tables.METADATA, values,
@@ -134,7 +143,7 @@ public class GenericDb extends SQLiteOpenHelper
 
   public long newFile(ContentValues values)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     return getWritableDatabase().insert(Tables.METADATA, null, values);
   }// newFile
 
@@ -142,7 +151,7 @@ public class GenericDb extends SQLiteOpenHelper
 
   public void newLocalConflict(MetaData file, ContentValues intendedUpdateValues)
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     ContentValues values = new ContentValues();
     values.put(LocalConflictColumns.FILE_ID, file.fileId());
     values.put(LocalConflictColumns.NEWFILE_URI,
@@ -150,13 +159,18 @@ public class GenericDb extends SQLiteOpenHelper
     values.put(LocalConflictColumns.NEWFILE_TIMESTAMP,
         intendedUpdateValues.getAsString(MetaDataColumns.TIME));
     getWritableDatabase().insert(Tables.LOCAL_CONFLICTS, null, values);
+    values.clear();
+    values.put(MetaDataColumns.CONFLICT, true);
+    String[] whereArgs = { file.fileId() };
+    getWritableDatabase().update(Tables.METADATA, values,
+        MetaDataColumns.FILE_ID + "=?", whereArgs);
   }// newLocalConflict
 
   // ---------------------------------------------------------------------------
 
   public void dumpDB()
   {
-    Utils.printMethodName();
+    Utils.printMethodName(TAG);
     Cursor c = getReadableDatabase().query(Tables.METADATA, null, null, null,
         null, null, null);
     DatabaseUtils.dumpCursor(c);
