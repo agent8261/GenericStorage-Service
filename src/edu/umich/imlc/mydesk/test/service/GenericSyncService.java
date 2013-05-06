@@ -143,7 +143,7 @@ public class GenericSyncService extends Service
               .doLogin();
 
         SyncTodos todos = new SyncTodos(getAndLockMetaDatas(account, provider),
-            NetworkOps.getListMetaData());
+            NetworkOps.getListMetaData(), syncResult);
 
         ArrayList<ContentProviderOperation> operationList = new ArrayList<ContentProviderOperation>();
 
@@ -176,6 +176,7 @@ public class GenericSyncService extends Service
       }
       catch( Exception e )
       {
+        ++syncResult.stats.numIoExceptions;
         e.printStackTrace();
       }
       finally
@@ -228,11 +229,13 @@ public class GenericSyncService extends Service
     private ArrayList<MetaData> toPush;
     private ArrayList<MetaData> toPull;
     private ArrayList<FileMetaData_ShortInfo_PB> newFiles;
-
+    private SyncResult mSyncResult;
+    
     public SyncTodos(Map<String, MetaData> local,
-        List<FileMetaData_ShortInfo_PB> backend)
+        List<FileMetaData_ShortInfo_PB> backend, SyncResult syncResult_)
     {
       Util.printMethodName(TAG);
+      mSyncResult = syncResult_;
       Log.i(TAG, "local:\n" + local);
       Log.i(TAG, "Backend:\n" + backend);
       untouched = new ArrayList<GenericContract.MetaData>();
@@ -248,11 +251,13 @@ public class GenericSyncService extends Service
           newFiles.add(b);
           continue;
         }
+        ++mSyncResult.stats.numEntries;
         MetaData m = local.remove(b.getFileID());
         if( m.dirty() )
         {
           if( m.sequenceNumber() <= b.getSequenceNumber() )
           {
+            ++mSyncResult.stats.numConflictDetectedExceptions;
             conflicts.add(m);
             continue;
           }
@@ -266,20 +271,24 @@ public class GenericSyncService extends Service
         {
           if( m.sequenceNumber() < b.getSequenceNumber() )
           {
+            ++mSyncResult.stats.numUpdates;
             toPull.add(m);
             continue;
           }
         }
         untouched.add(m);
+        ++mSyncResult.stats.numSkippedEntries;
       }
       for( MetaData m : local.values() )
       {
+        ++mSyncResult.stats.numEntries;
         if( m.dirty() )
         {
           toCreate.add(m);
           continue;
         }
         untouched.add(m);
+        ++mSyncResult.stats.numSkippedEntries;
       }
       Log.i(TAG, "conflicts:\n" + conflicts);
       Log.i(TAG, "toCreate:\n" + toCreate);
@@ -315,10 +324,11 @@ public class GenericSyncService extends Service
                   MetaDataColumns.TIME,
                   DateFormat.getDateTimeInstance().format(
                       translateDate(m_pb.getLastUpdated())));
-          operationList.add(b.build());
+          operationList.add(b.build());  
         }
         catch( Exception e )
         {
+          ++mSyncResult.stats.numIoExceptions;
           e.printStackTrace();
         }
       }
@@ -358,6 +368,7 @@ public class GenericSyncService extends Service
         }
         catch( Exception e )
         {
+          ++mSyncResult.stats.numIoExceptions;
           e.printStackTrace();
         }
       }
@@ -387,6 +398,7 @@ public class GenericSyncService extends Service
         }
         catch( Exception e )
         {
+          ++mSyncResult.stats.numIoExceptions;
           e.printStackTrace();
         }
       }
@@ -435,6 +447,7 @@ public class GenericSyncService extends Service
         }
         catch( Exception e )
         {
+          ++mSyncResult.stats.numIoExceptions;
           e.printStackTrace();
         }
       }

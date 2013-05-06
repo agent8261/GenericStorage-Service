@@ -53,8 +53,8 @@ public class LoginActivty extends Activity implements LoginCallback
     super.onStart();
     Utils.printMethodName(TAG);
     Intent i = getIntent();
-    
-    if(!i.getBooleanExtra(GenericContract.KEY_CHOOSE_ACCOUNT, false))
+
+    if( !i.getBooleanExtra(GenericContract.KEY_CHOOSE_ACCOUNT, false) )
     {
       if( getSharedPrefs().contains(GenericContract.PREFS_ACCOUNT_NAME) )
       {
@@ -62,8 +62,8 @@ public class LoginActivty extends Activity implements LoginCallback
         showAccountVerified(getSharedPrefs().getString(
             GenericContract.PREFS_ACCOUNT_NAME, ""));
         return;
-      }      
-    }    
+      }
+    }
     LoginUtilities.startAccountPicker(this, true);
   }
 
@@ -81,20 +81,35 @@ public class LoginActivty extends Activity implements LoginCallback
   public void onSuccess(final String accountName)
   {
     Utils.printMethodName(TAG);
+    
+    //disable syncing for old account
+    String oldAccountName = getSharedPrefs().getString(
+        GenericContract.PREFS_ACCOUNT_NAME, null);
+    if(oldAccountName != null)
+    {
+      Account oldAccount = new Account(oldAccountName, LoginUtilities.googleAccountType);
+      ContentResolver.setIsSyncable(oldAccount, GenericContract.AUTHORITY, 0);
+      ContentResolver.setSyncAutomatically(oldAccount, GenericContract.AUTHORITY,
+          false);
+    }
+    
+    //enable syncing of new account
     getSharedPrefs().edit()
         .putString(GenericContract.PREFS_ACCOUNT_NAME, accountName).apply();
     Account account = new Account(accountName, LoginUtilities.googleAccountType);
     ContentResolver.setIsSyncable(account, GenericContract.AUTHORITY, 1);
-    ContentResolver.setSyncAutomatically(account, GenericContract.AUTHORITY, true);
-    ContentResolver.addPeriodicSync(account, GenericContract.AUTHORITY, new Bundle(), 30*60);
+    ContentResolver.setSyncAutomatically(account, GenericContract.AUTHORITY,
+        true);
+    ContentResolver.addPeriodicSync(account, GenericContract.AUTHORITY,
+        new Bundle(), 30 * 60);
     runOnUiThread(new Runnable()
     {
-      
+
       @Override
       public void run()
       {
         prog.dismiss();
-        showAccountVerified(accountName);   
+        showAccountVerified(accountName);
       }
     });
   }
@@ -110,7 +125,7 @@ public class LoginActivty extends Activity implements LoginCallback
       public void run()
       {
         prog.dismiss();
-        showVerifyFail(e); 
+        showVerifyFail(e);
       }
     });
 
@@ -131,7 +146,7 @@ public class LoginActivty extends Activity implements LoginCallback
     });
     aBuilder.create().show();
   }
-  
+
   private void showVerifyFail(Throwable e)
   {
     Utils.printMethodName(TAG);
