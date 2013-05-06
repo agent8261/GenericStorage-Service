@@ -13,6 +13,7 @@ import android.content.DialogInterface;
 import android.content.DialogInterface.OnDismissListener;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.Bundle;
 
 public class LoginActivty extends Activity implements LoginCallback
 {
@@ -85,6 +86,7 @@ public class LoginActivty extends Activity implements LoginCallback
     Account account = new Account(accountName, LoginUtilities.googleAccountType);
     ContentResolver.setIsSyncable(account, GenericContract.AUTHORITY, 1);
     ContentResolver.setSyncAutomatically(account, GenericContract.AUTHORITY, true);
+    ContentResolver.addPeriodicSync(account, GenericContract.AUTHORITY, new Bundle(), 30*60);
     runOnUiThread(new Runnable()
     {
       

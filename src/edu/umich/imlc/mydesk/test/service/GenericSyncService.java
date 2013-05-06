@@ -46,6 +46,7 @@ public class GenericSyncService extends Service
   private static final String TAG = "GenericSync";
   private static GenericSyncAdapter syncAdapter = null;
   private static final int NOTIFICATION_CONFLICT = 1010;
+  private static final int NOTIFICATION_SYNC = 1011;
 
   @Override
   public IBinder onBind(Intent arg0)
@@ -64,13 +65,23 @@ public class GenericSyncService extends Service
     return syncAdapter;
   }
 
+  public static Date translateDate(Date_PB dPB)
+  {
+    Utils.printMethodName(TAG);
+    Calendar c = Calendar.getInstance();
+    c.set(dPB.getYear() - 1900, dPB.getMonth() - 1, dPB.getDay(), dPB.getTime()
+        .getHours(), dPB.getTime().getMinutes(), dPB.getTime().getSeconds());
+    return c.getTime();
+  }
+
   public static void displayConflictNotification(Context context)
   {
     Utils.printMethodName(TAG);
     NotificationCompat.Builder mBuilder = new NotificationCompat.Builder(
         context).setContentTitle("MyDesk Conflict")
         .setContentText("Tap to resolve conflict")
-        .setSmallIcon(android.R.drawable.stat_notify_sync_noanim);
+        .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
+        .setOngoing(true);
     // Creates an explicit intent for an Activity in your app
     Intent resultIntent = new Intent(context, ConflictActivity.class);
 
@@ -92,6 +103,23 @@ public class GenericSyncService extends Service
     mNotificationManager.notify(NOTIFICATION_CONFLICT, mBuilder.build());
   }// displayConflictNotification
 
+  public static NotificationCompat.Builder displaySyncNotification(
+      Context context)
+  {
+    Utils.printMethodName(TAG);
+    NotificationCompat.Builder mBuilder = new NotificationCompat.Builder(
+        context).setContentTitle("MyDesk Service")
+        .setContentText("Sync in progress")
+        .setSmallIcon(android.R.drawable.stat_notify_sync)
+        .setProgress(0, 0, true).setOngoing(true);
+
+    NotificationManager mNotificationManager = (NotificationManager) context
+        .getSystemService(Context.NOTIFICATION_SERVICE);
+    // mId allows you to update the notification later on.
+    mNotificationManager.notify(NOTIFICATION_SYNC, mBuilder.build());
+    return mBuilder;
+  }// displaySyncNotification
+
   private static class GenericSyncAdapter extends AbstractThreadedSyncAdapter
   {
 
@@ -106,13 +134,13 @@ public class GenericSyncService extends Service
         ContentProviderClient provider, SyncResult syncResult)
     {
       Util.printMethodName(TAG);
+      NotificationCompat.Builder mBuilder = displaySyncNotification(getContext()
+          .getApplicationContext());
+      String completeText = "Sync Complete";
       try
       {
-        if( !NetUtil.isLoggedIn() )
-        {
           new LoginTask(getContext().getApplicationContext(), account.name)
               .doLogin();
-        }
 
         SyncTodos todos = new SyncTodos(getAndLockMetaDatas(account, provider),
             NetworkOps.getListMetaData());
@@ -149,6 +177,15 @@ public class GenericSyncService extends Service
       catch( Exception e )
       {
         e.printStackTrace();
+      }
+      finally
+      {
+        mBuilder.setProgress(0, 0, false).setContentText(completeText)
+            .setAutoCancel(true).setOngoing(false);
+        NotificationManager mNotificationManager = (NotificationManager) getContext()
+            .getApplicationContext().getSystemService(
+                Context.NOTIFICATION_SERVICE);
+        mNotificationManager.notify(NOTIFICATION_SYNC, mBuilder.build());
       }
     }
 
@@ -345,6 +382,7 @@ public class GenericSyncService extends Service
                   .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
                   .build());
           b.withValue(MetaDataColumns.SEQUENCE, m_pb.getSequenceNumber());
+          b.withValue(MetaDataColumns.DIRTY, false);
           operationList.add(b.build());
         }
         catch( Exception e )
@@ -400,16 +438,6 @@ public class GenericSyncService extends Service
           e.printStackTrace();
         }
       }
-    }
-
-    private Date translateDate(Date_PB dPB)
-    {
-      Utils.printMethodName(TAG);
-      Calendar c = Calendar.getInstance();
-      c.set(dPB.getYear() - 1900, dPB.getMonth() - 1, dPB.getDay(), dPB
-          .getTime().getHours(), dPB.getTime().getMinutes(), dPB.getTime()
-          .getSeconds());
-      return c.getTime();
     }
   }
 }

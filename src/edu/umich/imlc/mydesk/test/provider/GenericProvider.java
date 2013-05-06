@@ -14,16 +14,11 @@ import edu.umich.imlc.mydesk.test.common.GenericContract;
 import edu.umich.imlc.mydesk.test.common.GenericContract.MetaDataColumns;
 import edu.umich.imlc.mydesk.test.common.Utils;
 import edu.umich.imlc.mydesk.test.db.GenericDb;
-import edu.umich.imlc.mydesk.test.service.ConflictActivity;
 import edu.umich.imlc.mydesk.test.service.GenericSyncService;
 
-import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.app.TaskStackBuilder;
 import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.UriMatcher;
 import android.database.Cursor;
@@ -31,7 +26,6 @@ import android.database.MatrixCursor;
 import android.database.sqlite.SQLiteQueryBuilder;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
-import android.support.v4.app.NotificationCompat;
 import android.util.Log;
 import edu.umich.imlc.mydesk.test.common.GenericContract.*;
 
@@ -247,6 +241,7 @@ public class GenericProvider extends ContentProvider
   // toggles the locked flag of all files owned by owner
   private int setLocks(String owner, boolean locked)
   {
+    Utils.printMethodName(TAG);
     ContentValues v = new ContentValues();
     v.put(MetaDataColumns.LOCKED, locked);
     String[] whereArgs = { owner };
@@ -259,6 +254,7 @@ public class GenericProvider extends ContentProvider
   private int updateAndSetLock(String fileId, boolean locked,
       ContentValues values)
   {
+    Utils.printMethodName(TAG);
     values.put(MetaDataColumns.LOCKED, locked);
     return genericDb.updateFile(genericDb.getFileMetaData(fileId), values);
   }// setLock
