@@ -34,8 +34,10 @@ public class GenericProvider extends ContentProvider
   public static final String TAG = "GenericProvider";
 
   private static final int FILES = 100;
-  private static final int FILE = 110;
-  private static final int CURRENT_ACCOUNT = 120;
+  private static final int FILE = 101;
+  private static final int CURRENT_ACCOUNT = 110;
+  private static final int CONFLICTS = 120;
+  private static final int CONFLICT = 121;
   private static final UriMatcher sURIMatcher = new UriMatcher(
       UriMatcher.NO_MATCH);
   static
@@ -44,6 +46,8 @@ public class GenericProvider extends ContentProvider
     sURIMatcher.addURI(GenericContract.AUTHORITY, "files/*", FILE);
     sURIMatcher.addURI(GenericContract.AUTHORITY, "current_account",
         CURRENT_ACCOUNT);
+    sURIMatcher.addURI(GenericContract.AUTHORITY, "conflicts", CONFLICTS);
+    sURIMatcher.addURI(GenericContract.AUTHORITY, "conflicts/*", CONFLICT);
   }
   private GenericDb genericDb;
   private SharedPreferences prefs;

@@ -12,6 +12,7 @@ import java.util.Map;
 import edu.umich.imlc.mydesk.MyDeskProtocolBuffer.FileMetaData_PB;
 import edu.umich.imlc.mydesk.MyDeskProtocolBuffer.FileMetaData_ShortInfo_PB;
 import edu.umich.imlc.mydesk.cloud.android.auth.LoginTask;
+import edu.umich.imlc.mydesk.cloud.client.exceptions.UserHasNoMyDeskAccount;
 import edu.umich.imlc.mydesk.cloud.client.network.NetUtil;
 import edu.umich.imlc.mydesk.cloud.client.network.NetworkOps;
 import edu.umich.imlc.mydesk.cloud.client.utilities.Util;
@@ -30,6 +31,7 @@ import android.app.TaskStackBuilder;
 import android.content.AbstractThreadedSyncAdapter;
 import android.content.ContentProviderClient;
 import android.content.ContentProviderOperation;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SyncResult;
@@ -120,6 +122,16 @@ public class GenericSyncService extends Service
     return mBuilder;
   }// displaySyncNotification
 
+  public static void displaySyncCompleteNotification(Context context,
+      NotificationCompat.Builder mBuilder, String completeText)
+  {
+    mBuilder.setProgress(0, 0, false).setContentText(completeText)
+        .setAutoCancel(true).setOngoing(false);
+    NotificationManager mNotificationManager = (NotificationManager) context
+        .getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
+    mNotificationManager.notify(NOTIFICATION_SYNC, mBuilder.build());
+  }
+
   private static class GenericSyncAdapter extends AbstractThreadedSyncAdapter
   {
 
@@ -134,13 +146,27 @@ public class GenericSyncService extends Service
         ContentProviderClient provider, SyncResult syncResult)
     {
       Util.printMethodName(TAG);
+      Log.d(TAG, "Starting sync for " + account.name);
+      String accountName = getContext().getSharedPreferences(
+          GenericContract.SHARED_PREFS, 0).getString(
+          GenericContract.PREFS_ACCOUNT_NAME, null);
+      if( accountName == null || !accountName.equals(account.name) )
+      {
+        // no / not current user
+        Log.d(TAG, "The requested sync account " + account.name
+            + " is not the currently logged in account");
+        ContentResolver.setSyncAutomatically(account,
+            GenericContract.AUTHORITY, false);
+        Log.d(TAG, "Sync finsihed for " + account.name);
+        return;
+      }
       NotificationCompat.Builder mBuilder = displaySyncNotification(getContext()
           .getApplicationContext());
       String completeText = "Sync Complete";
       try
       {
-          new LoginTask(getContext().getApplicationContext(), account.name)
-              .doLogin();
+        new LoginTask(getContext().getApplicationContext(), account.name)
+            .doLogin();
 
         SyncTodos todos = new SyncTodos(getAndLockMetaDatas(account, provider),
             NetworkOps.getListMetaData(), syncResult);
@@ -174,6 +200,11 @@ public class GenericSyncService extends Service
             .appendQueryParameter(GenericContract.UNLOCK_FILE, "true").build(),
             null, null, null);
       }
+      catch( UserHasNoMyDeskAccount uhnma )
+      {
+        ++syncResult.stats.numAuthExceptions;
+        uhnma.printStackTrace();
+      }
       catch( Exception e )
       {
         ++syncResult.stats.numIoExceptions;
@@ -181,12 +212,9 @@ public class GenericSyncService extends Service
       }
       finally
       {
-        mBuilder.setProgress(0, 0, false).setContentText(completeText)
-            .setAutoCancel(true).setOngoing(false);
-        NotificationManager mNotificationManager = (NotificationManager) getContext()
-            .getApplicationContext().getSystemService(
-                Context.NOTIFICATION_SERVICE);
-        mNotificationManager.notify(NOTIFICATION_SYNC, mBuilder.build());
+        Log.d(TAG, "Sync finsihed for " + account.name);
+        displaySyncCompleteNotification(getContext().getApplicationContext(),
+            mBuilder, completeText);
       }
     }
 
@@ -230,14 +258,14 @@ public class GenericSyncService extends Service
     private ArrayList<MetaData> toPull;
     private ArrayList<FileMetaData_ShortInfo_PB> newFiles;
     private SyncResult mSyncResult;
-    
+
     public SyncTodos(Map<String, MetaData> local,
         List<FileMetaData_ShortInfo_PB> backend, SyncResult syncResult_)
     {
       Util.printMethodName(TAG);
       mSyncResult = syncResult_;
-      Log.i(TAG, "local:\n" + local);
-      Log.i(TAG, "Backend:\n" + backend);
+      Log.d(TAG, "local:\n" + local);
+      Log.d(TAG, "Backend:\n" + backend);
       untouched = new ArrayList<GenericContract.MetaData>();
       conflicts = new ArrayList<GenericContract.MetaData>();
       toCreate = new ArrayList<GenericContract.MetaData>();
@@ -290,12 +318,12 @@ public class GenericSyncService extends Service
         untouched.add(m);
         ++mSyncResult.stats.numSkippedEntries;
       }
-      Log.i(TAG, "conflicts:\n" + conflicts);
-      Log.i(TAG, "toCreate:\n" + toCreate);
-      Log.i(TAG, "toPush:\n" + toPush);
-      Log.i(TAG, "toPull:\n" + toPull);
-      Log.i(TAG, "newFiles:\n" + newFiles);
-      Log.i(TAG, "untouched:\n" + untouched);
+      Log.d(TAG, "conflicts:\n" + conflicts);
+      Log.d(TAG, "toCreate:\n" + toCreate);
+      Log.d(TAG, "toPush:\n" + toPush);
+      Log.d(TAG, "toPull:\n" + toPull);
+      Log.d(TAG, "newFiles:\n" + newFiles);
+      Log.d(TAG, "untouched:\n" + untouched);
     }
 
     public void addPullOperations(
@@ -324,7 +352,7 @@ public class GenericSyncService extends Service
                   MetaDataColumns.TIME,
                   DateFormat.getDateTimeInstance().format(
                       translateDate(m_pb.getLastUpdated())));
-          operationList.add(b.build());  
+          operationList.add(b.build());
         }
         catch( Exception e )
         {
@@ -450,6 +478,20 @@ public class GenericSyncService extends Service
           ++mSyncResult.stats.numIoExceptions;
           e.printStackTrace();
         }
+      }
+    }
+
+    public void addConflictOpeations(
+        ArrayList<ContentProviderOperation> operationList)
+    {
+      Util.printMethodName(TAG);
+      for( MetaData m : conflicts )
+      {
+        ContentProviderOperation.Builder b = ContentProviderOperation
+            .newInsert(GenericContract.URI_CONFLICTS
+                .buildUpon()
+                .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
+                    "true").build());
       }
     }
   }

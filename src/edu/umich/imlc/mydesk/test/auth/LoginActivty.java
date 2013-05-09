@@ -88,7 +88,6 @@ public class LoginActivty extends Activity implements LoginCallback
     if(oldAccountName != null)
     {
       Account oldAccount = new Account(oldAccountName, LoginUtilities.googleAccountType);
-      ContentResolver.setIsSyncable(oldAccount, GenericContract.AUTHORITY, 0);
       ContentResolver.setSyncAutomatically(oldAccount, GenericContract.AUTHORITY,
           false);
     }
@@ -97,7 +96,6 @@ public class LoginActivty extends Activity implements LoginCallback
     getSharedPrefs().edit()
         .putString(GenericContract.PREFS_ACCOUNT_NAME, accountName).apply();
     Account account = new Account(accountName, LoginUtilities.googleAccountType);
-    ContentResolver.setIsSyncable(account, GenericContract.AUTHORITY, 1);
     ContentResolver.setSyncAutomatically(account, GenericContract.AUTHORITY,
         true);
     ContentResolver.addPeriodicSync(account, GenericContract.AUTHORITY,
