@@ -6,11 +6,11 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
-import java.text.DateFormat;
 import java.util.Date;
 import java.util.UUID;
 
 import edu.umich.imlc.mydesk.test.common.GenericContract;
+import edu.umich.imlc.mydesk.test.common.GenericContract.GenericURIs;
 import edu.umich.imlc.mydesk.test.common.GenericContract.MetaDataColumns;
 import edu.umich.imlc.mydesk.test.common.Utils;
 import edu.umich.imlc.mydesk.test.db.GenericDb;
@@ -36,8 +36,8 @@ public class GenericProvider extends ContentProvider
   private static final int FILES = 100;
   private static final int FILE = 101;
   private static final int CURRENT_ACCOUNT = 110;
-  private static final int CONFLICTS = 120;
-  private static final int CONFLICT = 121;
+  private static final int BACKEND_CONFLICTS = 120;
+  private static final int BACKEND_CONFLICT = 121;
   private static final UriMatcher sURIMatcher = new UriMatcher(
       UriMatcher.NO_MATCH);
   static
@@ -46,8 +46,10 @@ public class GenericProvider extends ContentProvider
     sURIMatcher.addURI(GenericContract.AUTHORITY, "files/*", FILE);
     sURIMatcher.addURI(GenericContract.AUTHORITY, "current_account",
         CURRENT_ACCOUNT);
-    sURIMatcher.addURI(GenericContract.AUTHORITY, "conflicts", CONFLICTS);
-    sURIMatcher.addURI(GenericContract.AUTHORITY, "conflicts/*", CONFLICT);
+    sURIMatcher.addURI(GenericContract.AUTHORITY, "backend_conflicts",
+        BACKEND_CONFLICTS);
+    sURIMatcher.addURI(GenericContract.AUTHORITY, "backend_conflicts/*",
+        BACKEND_CONFLICT);
   }
   private GenericDb genericDb;
   private SharedPreferences prefs;
@@ -100,12 +102,12 @@ public class GenericProvider extends ContentProvider
   public Uri insert(Uri uri, ContentValues values)
   {
     Utils.printMethodName(TAG);
-    switch ( sURIMatcher.match(uri) )
+    genericDb.getWritableDatabase().beginTransaction();
+    try
     {
-      case FILES:
-        genericDb.getWritableDatabase().beginTransaction();
-        try
-        {
+      switch ( sURIMatcher.match(uri) )
+      {
+        case FILES:
           Uri newFile;
           if( !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri) )
           {
@@ -116,22 +118,32 @@ public class GenericProvider extends ContentProvider
             newFile = newBackendFile(values);
           }
           genericDb.getWritableDatabase().setTransactionSuccessful();
-          getContext().getContentResolver().notifyChange(
-              GenericContract.URI_FILES, null,
+          getContext().getContentResolver().notifyChange(GenericURIs.URI_FILES,
+              null,
               !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri));
           return newFile;
-        }
-        catch( IOException e )
-        {
-          e.printStackTrace();
-          throw new IllegalStateException(e);
-        }
-        finally
-        {
-          genericDb.getWritableDatabase().endTransaction();
-        }
-      default:
-        throw new IllegalArgumentException("Invalid URI: " + uri.toString());
+        case BACKEND_CONFLICT:
+          if( !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri) )
+          {
+            throw new IllegalArgumentException("Caller not syncAdapter");
+          }
+          Uri newBackendConflict = Uri.withAppendedPath(
+              GenericURIs.URI_BACKEND_CONFLICTS,
+              Long.toString(genericDb.newBackendConflict(values)));
+          genericDb.getWritableDatabase().setTransactionSuccessful();
+          return newBackendConflict;
+        default:
+          throw new IllegalArgumentException("Invalid URI: " + uri.toString());
+      }
+    }
+    catch( IOException e )
+    {
+      e.printStackTrace();
+      throw new IllegalStateException(e);
+    }
+    finally
+    {
+      genericDb.getWritableDatabase().endTransaction();
     }
   }
 
@@ -281,7 +293,7 @@ public class GenericProvider extends ContentProvider
       {
         // file is locked and someone other than the sync adapter is trying to
         // access it
-        throw new IllegalArgumentException(
+        throw new IllegalStateException(
             Exceptions.FILELOCKEDEXCEPTION.name());
       }
       Uri oldFile = fileMetaData.fileUri();
@@ -323,7 +335,7 @@ public class GenericProvider extends ContentProvider
         copyFile(fromFile, toFile);
 
         // populate local specific column values
-        newTime = DateFormat.getDateTimeInstance().format(new Date());
+        newTime = GenericContract.INTERNAL_DATE_FORMAT.format(new Date());
         newSeq = fileMetaData.sequenceNumber();
         if( !fileMetaData.dirty() )
         {
@@ -400,7 +412,7 @@ public class GenericProvider extends ContentProvider
     {
       // file is locked and someone other than the sync adapter is trying to
       // access it
-      throw new IllegalArgumentException(Exceptions.FILELOCKEDEXCEPTION.name());
+      throw new IllegalStateException(Exceptions.FILELOCKEDEXCEPTION.name());
     }
 
     File privateFile = new File(file.fileUri().getPath());
@@ -474,12 +486,12 @@ public class GenericProvider extends ContentProvider
     copyFile(fromFile, toFile);
 
     ContentValues updateValues = prepareMetaDataUpdate(Uri.fromFile(toFile), 0,
-        DateFormat.getDateTimeInstance().format(new Date()));
+        GenericContract.INTERNAL_DATE_FORMAT.format(new Date()));
 
     // update the metadata information
     genericDb.updateFile(file, updateValues);
 
-    return Uri.withAppendedPath(GenericContract.URI_FILES, newId);
+    return Uri.withAppendedPath(GenericURIs.URI_FILES, newId);
   }// newFile
 
   // ---------------------------------------------------------------------------
@@ -490,7 +502,7 @@ public class GenericProvider extends ContentProvider
     genericDb.newFile(values);
     MetaData file = genericDb.getFileMetaData(values
         .getAsString(MetaDataColumns.FILE_ID));
-    return Uri.withAppendedPath(GenericContract.URI_FILES, file.fileId());
+    return Uri.withAppendedPath(GenericURIs.URI_FILES, file.fileId());
   }// newBackendFile
 
   // ---------------------------------------------------------------------------

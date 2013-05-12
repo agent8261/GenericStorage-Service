@@ -166,6 +166,28 @@ public class GenericDb extends SQLiteOpenHelper
         MetaDataColumns.FILE_ID + "=?", whereArgs);
   }// newLocalConflict
 
+
+  public long newBackendConflict(ContentValues values)
+  {
+    Utils.printMethodName(TAG);
+    SQLiteDatabase db = getWritableDatabase();
+
+    // upsert to backend conflict table
+    long conflictId = db.insertWithOnConflict(Tables.BACKEND_CONFLICTS, null, values,
+        SQLiteDatabase.CONFLICT_IGNORE);
+    String[] whereArgs = { values.getAsString(BackendConflictColumns.FILE_ID) };
+    db.update(Tables.BACKEND_CONFLICTS, values, BackendConflictColumns.FILE_ID
+        + "=?", whereArgs);
+
+    // flag file metadata as conflicted
+    ContentValues metadataVal = new ContentValues();
+    metadataVal.put(MetaDataColumns.CONFLICT, true);
+    db.update(Tables.METADATA, metadataVal, MetaDataColumns.FILE_ID + "=?",
+        whereArgs);
+    
+    return conflictId;
+  }
+
   // ---------------------------------------------------------------------------
 
   public void dumpDB()

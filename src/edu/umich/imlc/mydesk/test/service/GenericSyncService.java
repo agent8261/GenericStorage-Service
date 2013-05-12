@@ -13,10 +13,11 @@ import edu.umich.imlc.mydesk.MyDeskProtocolBuffer.FileMetaData_PB;
 import edu.umich.imlc.mydesk.MyDeskProtocolBuffer.FileMetaData_ShortInfo_PB;
 import edu.umich.imlc.mydesk.cloud.android.auth.LoginTask;
 import edu.umich.imlc.mydesk.cloud.client.exceptions.UserHasNoMyDeskAccount;
-import edu.umich.imlc.mydesk.cloud.client.network.NetUtil;
 import edu.umich.imlc.mydesk.cloud.client.network.NetworkOps;
 import edu.umich.imlc.mydesk.cloud.client.utilities.Util;
 import edu.umich.imlc.mydesk.test.common.GenericContract;
+import edu.umich.imlc.mydesk.test.common.GenericContract.BackendConflictColumns;
+import edu.umich.imlc.mydesk.test.common.GenericContract.GenericURIs;
 import edu.umich.imlc.mydesk.test.common.GenericContract.MetaData;
 import edu.umich.imlc.mydesk.test.common.GenericContract.MetaDataColumns;
 import edu.umich.imlc.mydesk.test.common.GenericContract.MetaDataProjections;
@@ -169,7 +170,7 @@ public class GenericSyncService extends Service
             .doLogin();
 
         SyncTodos todos = new SyncTodos(getAndLockMetaDatas(account, provider),
-            NetworkOps.getListMetaData(), syncResult);
+            NetworkOps.getListMetaData(), syncResult, account);
 
         ArrayList<ContentProviderOperation> operationList = new ArrayList<ContentProviderOperation>();
 
@@ -195,10 +196,15 @@ public class GenericSyncService extends Service
         provider.applyBatch(operationList);
         operationList.clear();
 
-        provider.update(GenericContract.URI_FILES.buildUpon()
-            .appendQueryParameter(MetaDataColumns.OWNER, account.name)
-            .appendQueryParameter(GenericContract.UNLOCK_FILE, "true").build(),
-            null, null, null);
+        todos.addConflictOperations(operationList);
+        provider.applyBatch(operationList);
+        operationList.clear();
+
+        provider.update(
+            GenericURIs.URI_FILES.buildUpon()
+                .appendQueryParameter(MetaDataColumns.OWNER, account.name)
+                .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
+                .build(), null, null, null);
       }
       catch( UserHasNoMyDeskAccount uhnma )
       {
@@ -222,11 +228,12 @@ public class GenericSyncService extends Service
         ContentProviderClient provider) throws RemoteException
     {
       Util.printMethodName(TAG);
-      provider.update(GenericContract.URI_FILES.buildUpon()
-          .appendQueryParameter(MetaDataColumns.OWNER, account.name)
-          .appendQueryParameter(GenericContract.LOCK_FILE, "true").build(),
+      provider.update(
+          GenericURIs.URI_FILES.buildUpon()
+              .appendQueryParameter(MetaDataColumns.OWNER, account.name)
+              .appendQueryParameter(GenericContract.LOCK_FILE, "true").build(),
           null, null, null);
-      Cursor c = provider.query(GenericContract.URI_FILES.buildUpon()
+      Cursor c = provider.query(GenericURIs.URI_FILES.buildUpon()
           .appendQueryParameter(MetaDataColumns.OWNER, account.name).build(),
           MetaDataProjections.METADATA, null, null, null);
       try
@@ -251,6 +258,7 @@ public class GenericSyncService extends Service
 
   private static class SyncTodos
   {
+    private final Account syncAccount;
     private ArrayList<MetaData> untouched;
     private ArrayList<MetaData> conflicts;
     private ArrayList<MetaData> toCreate;
@@ -259,12 +267,14 @@ public class GenericSyncService extends Service
     private ArrayList<FileMetaData_ShortInfo_PB> newFiles;
     private SyncResult mSyncResult;
 
-    public SyncTodos(Map<String, MetaData> local,
-        List<FileMetaData_ShortInfo_PB> backend, SyncResult syncResult_)
+    public SyncTodos(Map<String, MetaData> local_,
+        List<FileMetaData_ShortInfo_PB> backend, SyncResult syncResult_,
+        Account account_)
     {
       Util.printMethodName(TAG);
+      syncAccount = account_;
       mSyncResult = syncResult_;
-      Log.d(TAG, "local:\n" + local);
+      Log.d(TAG, "local:\n" + local_);
       Log.d(TAG, "Backend:\n" + backend);
       untouched = new ArrayList<GenericContract.MetaData>();
       conflicts = new ArrayList<GenericContract.MetaData>();
@@ -274,13 +284,20 @@ public class GenericSyncService extends Service
       newFiles = new ArrayList<FileMetaData_ShortInfo_PB>();
       for( FileMetaData_ShortInfo_PB b : backend )
       {
-        if( !local.containsKey(b.getFileID()) )
+        if( !local_.containsKey(b.getFileID()) )
         {
+          ++mSyncResult.stats.numInserts;
           newFiles.add(b);
           continue;
         }
         ++mSyncResult.stats.numEntries;
-        MetaData m = local.remove(b.getFileID());
+        MetaData m = local_.remove(b.getFileID());
+        if( m.conflict() )
+        {
+          // don't touch conflicted files, but don't unlock them since we will
+          // be touching them after this
+          continue;
+        }
         if( m.dirty() )
         {
           if( m.sequenceNumber() <= b.getSequenceNumber() )
@@ -307,10 +324,14 @@ public class GenericSyncService extends Service
         untouched.add(m);
         ++mSyncResult.stats.numSkippedEntries;
       }
-      for( MetaData m : local.values() )
+
+      // any files remaining means that they don't exist on the backend, so
+      // conflict is impossible, but exclude them when there is a local
+      // conflict.
+      for( MetaData m : local_.values() )
       {
         ++mSyncResult.stats.numEntries;
-        if( m.dirty() )
+        if( m.dirty() && !m.conflict() )
         {
           toCreate.add(m);
           continue;
@@ -339,7 +360,7 @@ public class GenericSyncService extends Service
           FileMetaData_PB m_pb = NetworkOps.getFileMetaData(m.fileId());
           long newSeq = NetworkOps.getFile(m.fileId(), newFile);
           ContentProviderOperation.Builder b = ContentProviderOperation
-              .newUpdate(GenericContract.URI_FILES
+              .newUpdate(GenericURIs.URI_FILES
                   .buildUpon()
                   .appendPath(m.fileId())
                   .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
@@ -367,7 +388,7 @@ public class GenericSyncService extends Service
         Context c)
     {
       Util.printMethodName(TAG);
-      Uri uri = GenericContract.URI_FILES.buildUpon()
+      Uri uri = GenericURIs.URI_FILES.buildUpon()
           .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER, "true")
           .build();
       for( FileMetaData_ShortInfo_PB mShort : newFiles )
@@ -388,8 +409,8 @@ public class GenericSyncService extends Service
               .withValue(MetaDataColumns.SEQUENCE, newSeq)
               .withValue(
                   MetaDataColumns.TIME,
-                  DateFormat.getDateTimeInstance().format(
-                      translateDate(m.getLastUpdated())))
+                  GenericContract.INTERNAL_DATE_FORMAT.format(translateDate(m
+                      .getLastUpdated())))
               .withValue(MetaDataColumns.DIRTY, false)
               .withValue(MetaDataColumns.URI, Uri.fromFile(newFile).toString());
           operationList.add(b.build());
@@ -413,7 +434,7 @@ public class GenericSyncService extends Service
           FileMetaData_PB m_pb = NetworkOps.createFile(new File(m.fileUri()
               .getPath()), m.fileId(), m.fileName(), m.fileType());
           ContentProviderOperation.Builder b = ContentProviderOperation
-              .newUpdate(GenericContract.URI_FILES
+              .newUpdate(GenericURIs.URI_FILES
                   .buildUpon()
                   .appendPath(m.fileId())
                   .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
@@ -439,7 +460,7 @@ public class GenericSyncService extends Service
       for( MetaData m : untouched )
       {
         ContentProviderOperation.Builder b = ContentProviderOperation
-            .newUpdate(GenericContract.URI_FILES
+            .newUpdate(GenericURIs.URI_FILES
                 .buildUpon()
                 .appendPath(m.fileId())
                 .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
@@ -462,7 +483,7 @@ public class GenericSyncService extends Service
           FileMetaData_PB m_pb = NetworkOps.overWriteFile(new File(m.fileUri()
               .getPath()), m.fileId(), m.fileName(), m.fileType());
           ContentProviderOperation.Builder b = ContentProviderOperation
-              .newUpdate(GenericContract.URI_FILES
+              .newUpdate(GenericURIs.URI_FILES
                   .buildUpon()
                   .appendPath(m.fileId())
                   .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
@@ -481,17 +502,35 @@ public class GenericSyncService extends Service
       }
     }
 
-    public void addConflictOpeations(
+    public void addConflictOperations(
         ArrayList<ContentProviderOperation> operationList)
     {
       Util.printMethodName(TAG);
       for( MetaData m : conflicts )
       {
-        ContentProviderOperation.Builder b = ContentProviderOperation
-            .newInsert(GenericContract.URI_CONFLICTS
-                .buildUpon()
-                .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
-                    "true").build());
+        try
+        {
+          FileMetaData_PB m_pb = NetworkOps.getFileMetaData(m.fileId());
+          ContentProviderOperation.Builder b = ContentProviderOperation
+              .newInsert(GenericURIs.URI_BACKEND_CONFLICTS
+                  .buildUpon()
+                  .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
+                      "true").build());
+          b.withValue(BackendConflictColumns.FILE_ID, m.fileId())
+              .withValue(BackendConflictColumns.FILE_OWNER, syncAccount.name)
+              .withValue(BackendConflictColumns.BACKEND_SEQUENCE,
+                  m_pb.getSequenceNumber())
+              .withValue(
+                  BackendConflictColumns.BACKEND_TIMESTAMP,
+                  GenericContract.INTERNAL_DATE_FORMAT
+                      .format(translateDate(m_pb.getLastUpdated())));
+          operationList.add(b.build());
+        }
+        catch( Exception e )
+        {
+          ++mSyncResult.stats.numIoExceptions;
+          e.printStackTrace();
+        }
       }
     }
   }
