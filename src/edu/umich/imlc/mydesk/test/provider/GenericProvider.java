@@ -68,7 +68,13 @@ public class GenericProvider extends ContentProvider
   public int delete(Uri arg0, String arg1, String[] arg2)
   {
     Utils.printMethodName(TAG);
-    throw new UnsupportedOperationException("delete not supported");
+    // the only supported delete operation is deleting files not owned by the
+    // current user
+    genericDb.getWritableDatabase().beginTransaction();
+    String currentUser = getUser();
+    genericDb.getWritableDatabase().setTransactionSuccessful();
+    genericDb.getWritableDatabase().endTransaction();
+    return 0;
   }
 
   // ---------------------------------------------------------------------------
@@ -293,8 +299,7 @@ public class GenericProvider extends ContentProvider
       {
         // file is locked and someone other than the sync adapter is trying to
         // access it
-        throw new IllegalStateException(
-            Exceptions.FILELOCKEDEXCEPTION.name());
+        throw new IllegalStateException(Exceptions.FILELOCKEDEXCEPTION.name());
       }
       Uri oldFile = fileMetaData.fileUri();
 

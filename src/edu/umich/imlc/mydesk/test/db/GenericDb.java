@@ -188,6 +188,11 @@ public class GenericDb extends SQLiteOpenHelper
     return conflictId;
   }
 
+  public int deleteAllUserFiles(String user)
+  {
+    
+    return 0;
+  }
   // ---------------------------------------------------------------------------
 
   public void dumpDB()

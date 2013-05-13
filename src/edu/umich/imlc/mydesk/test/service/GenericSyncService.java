@@ -122,6 +122,16 @@ public class GenericSyncService extends Service
     return mBuilder;
   }// displaySyncNotification
 
+  public static void updateSyncNotification(Context context,
+      NotificationCompat.Builder mBuilder, String contentText)
+  {
+    mBuilder.setContentText(contentText);
+    NotificationManager mNotificationManager = (NotificationManager) context
+        .getSystemService(Context.NOTIFICATION_SERVICE);
+    // mId allows you to update the notification later on.
+    mNotificationManager.notify(NOTIFICATION_SYNC, mBuilder.build());
+  }
+
   public static void dissmissNotification(Context context, int id)
   {
     NotificationManager mNotificationManager = (NotificationManager) context
@@ -157,14 +167,15 @@ public class GenericSyncService extends Service
         Log.d(TAG, "Sync finsihed for " + account.name);
         return;
       }
-      displaySyncNotification(getContext().getApplicationContext());
+      NotificationCompat.Builder mBuilder = displaySyncNotification(getContext()
+          .getApplicationContext());
       try
       {
         new LoginTask(getContext().getApplicationContext(), account.name)
             .doLogin();
 
         SyncTodos todos = new SyncTodos(getAndLockMetaDatas(account, provider),
-            NetworkOps.getListMetaData(), syncResult, account);
+            NetworkOps.getListMetaData(), syncResult, account, mBuilder, getContext().getApplicationContext());
 
         ArrayList<ContentProviderOperation> operationList = new ArrayList<ContentProviderOperation>();
 
@@ -172,13 +183,11 @@ public class GenericSyncService extends Service
         provider.applyBatch(operationList);
         operationList.clear();
 
-        todos.addPullOperations(operationList, getContext()
-            .getApplicationContext());
+        todos.addPullOperations(operationList);
         provider.applyBatch(operationList);
         operationList.clear();
 
-        todos.addNewFilesOperations(operationList, account.name, getContext()
-            .getApplicationContext());
+        todos.addNewFilesOperations(operationList, account.name);
         provider.applyBatch(operationList);
         operationList.clear();
 
@@ -255,14 +264,18 @@ public class GenericSyncService extends Service
     private ArrayList<MetaData> toPull;
     private ArrayList<FileMetaData_ShortInfo_PB> newFiles;
     private SyncResult mSyncResult;
-
+    private NotificationCompat.Builder mBuilder;
+    private Context mContext;
+    
     public SyncTodos(Map<String, MetaData> local_,
         List<FileMetaData_ShortInfo_PB> backend, SyncResult syncResult_,
-        Account account_)
+        Account account_, NotificationCompat.Builder notBuilder_, Context c_)
     {
       Util.printMethodName(TAG);
       syncAccount = account_;
       mSyncResult = syncResult_;
+      mBuilder = notBuilder_;
+      mContext = c_;
       Log.d(TAG, "local:\n" + local_);
       Log.d(TAG, "Backend:\n" + backend);
       untouched = new ArrayList<GenericContract.MetaData>();
@@ -337,14 +350,15 @@ public class GenericSyncService extends Service
     }
 
     public void addPullOperations(
-        ArrayList<ContentProviderOperation> operationList, Context c)
+        ArrayList<ContentProviderOperation> operationList)
     {
       Util.printMethodName(TAG);
       for( MetaData m : toPull )
       {
         try
         {
-          File newFile = new File(Utils.createRandomFileUri(c.getFilesDir())
+          updateSyncNotification(mContext, mBuilder, "Updating: " + m.fileName());
+          File newFile = new File(Utils.createRandomFileUri(mContext.getFilesDir())
               .getPath());
           FileMetaData_PB m_pb = NetworkOps.getFileMetaData(m.fileId());
           long newSeq = NetworkOps.getFile(m.fileId(), newFile);
@@ -373,8 +387,7 @@ public class GenericSyncService extends Service
     }
 
     public void addNewFilesOperations(
-        ArrayList<ContentProviderOperation> operationList, String owner,
-        Context c)
+        ArrayList<ContentProviderOperation> operationList, String owner)
     {
       Util.printMethodName(TAG);
       Uri uri = GenericURIs.URI_FILES.buildUpon()
@@ -384,8 +397,10 @@ public class GenericSyncService extends Service
       {
         try
         {
+          updateSyncNotification(mContext, mBuilder,
+              "Downloading new file: " + mShort.getFileName());
           FileMetaData_PB m = NetworkOps.getFileMetaData(mShort.getFileID());
-          File newFile = new File(Utils.createRandomFileUri(c.getFilesDir())
+          File newFile = new File(Utils.createRandomFileUri(mContext.getFilesDir())
               .getPath());
           long newSeq = NetworkOps.getFile(m.getFileID(), newFile);
 
@@ -420,6 +435,7 @@ public class GenericSyncService extends Service
       {
         try
         {
+          updateSyncNotification(mContext, mBuilder, "Uploading new file: "+m.fileName());
           FileMetaData_PB m_pb = NetworkOps.createFile(new File(m.fileUri()
               .getPath()), m.fileId(), m.fileName(), m.fileType());
           ContentProviderOperation.Builder b = ContentProviderOperation
@@ -469,6 +485,7 @@ public class GenericSyncService extends Service
       {
         try
         {
+          updateSyncNotification(mContext, mBuilder, "Uploading: "+m.fileName());
           FileMetaData_PB m_pb = NetworkOps.overWriteFile(new File(m.fileUri()
               .getPath()), m.fileId(), m.fileName(), m.fileType());
           ContentProviderOperation.Builder b = ContentProviderOperation
@@ -495,6 +512,7 @@ public class GenericSyncService extends Service
         ArrayList<ContentProviderOperation> operationList)
     {
       Util.printMethodName(TAG);
+      updateSyncNotification(mContext, mBuilder, "Detecting conflicts");
       for( MetaData m : conflicts )
       {
         try
