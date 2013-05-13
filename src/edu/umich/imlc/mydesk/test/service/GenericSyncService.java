@@ -12,7 +12,6 @@ import java.util.Map;
 import edu.umich.imlc.mydesk.MyDeskProtocolBuffer.FileMetaData_PB;
 import edu.umich.imlc.mydesk.MyDeskProtocolBuffer.FileMetaData_ShortInfo_PB;
 import edu.umich.imlc.mydesk.cloud.android.auth.LoginTask;
-import edu.umich.imlc.mydesk.cloud.client.exceptions.UserHasNoMyDeskAccount;
 import edu.umich.imlc.mydesk.cloud.client.network.NetworkOps;
 import edu.umich.imlc.mydesk.cloud.client.utilities.Util;
 import edu.umich.imlc.mydesk.test.common.GenericContract;
@@ -123,14 +122,11 @@ public class GenericSyncService extends Service
     return mBuilder;
   }// displaySyncNotification
 
-  public static void displaySyncCompleteNotification(Context context,
-      NotificationCompat.Builder mBuilder, String completeText)
+  public static void dissmissNotification(Context context, int id)
   {
-    mBuilder.setProgress(0, 0, false).setContentText(completeText)
-        .setAutoCancel(true).setOngoing(false);
     NotificationManager mNotificationManager = (NotificationManager) context
         .getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
-    mNotificationManager.notify(NOTIFICATION_SYNC, mBuilder.build());
+    mNotificationManager.cancel(id);
   }
 
   private static class GenericSyncAdapter extends AbstractThreadedSyncAdapter
@@ -161,9 +157,7 @@ public class GenericSyncService extends Service
         Log.d(TAG, "Sync finsihed for " + account.name);
         return;
       }
-      NotificationCompat.Builder mBuilder = displaySyncNotification(getContext()
-          .getApplicationContext());
-      String completeText = "Sync Complete";
+      displaySyncNotification(getContext().getApplicationContext());
       try
       {
         new LoginTask(getContext().getApplicationContext(), account.name)
@@ -206,11 +200,6 @@ public class GenericSyncService extends Service
                 .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
                 .build(), null, null, null);
       }
-      catch( UserHasNoMyDeskAccount uhnma )
-      {
-        ++syncResult.stats.numAuthExceptions;
-        uhnma.printStackTrace();
-      }
       catch( Exception e )
       {
         ++syncResult.stats.numIoExceptions;
@@ -219,8 +208,8 @@ public class GenericSyncService extends Service
       finally
       {
         Log.d(TAG, "Sync finsihed for " + account.name);
-        displaySyncCompleteNotification(getContext().getApplicationContext(),
-            mBuilder, completeText);
+        dissmissNotification(getContext().getApplicationContext(),
+            NOTIFICATION_SYNC);
       }
     }
 
