@@ -36,14 +36,18 @@ public class GenericDb extends SQLiteOpenHelper
       + " TEXT NOT NULL, " + LocalConflictColumns.NEWFILE_TIMESTAMP
       + " TEXT NOT NULL," + LocalConflictColumns.RESOLVED
       + " TEXT DEFAULT NULL, " + "PRIMARY KEY(" + LocalConflictColumns.ID
-      + "))";
+      + "), FOREIGN KEY(" + LocalConflictColumns.FILE_ID + ") REFERENCES "
+      + Tables.METADATA + "(" + MetaDataColumns.FILE_ID
+      + ") ON DELETE CASCADE)";
 
   private static final String CREATE_TABLE_BACKEND_CONFLICTS = "CREATE TABLE "
       + Tables.BACKEND_CONFLICTS + "(" + BackendConflictColumns.ID
       + " INTEGER NOT NULL, " + BackendConflictColumns.FILE_ID
       + " TEXT NOT NULL, " + BackendConflictColumns.RESOLVED
       + " TEXT DEFAULT NULL, " + " PRIMARY KEY(" + BackendConflictColumns.ID
-      + "))";
+      + "), FOREIGN KEY(" + BackendConflictColumns.FILE_ID + ") REFERENCES "
+      + Tables.METADATA + "(" + MetaDataColumns.FILE_ID
+      + ") ON DELETE CASCADE)";
 
   // ---------------------------------------------------------------------------
   // ---------------------------------------------------------------------------
@@ -173,8 +177,8 @@ public class GenericDb extends SQLiteOpenHelper
     SQLiteDatabase db = getWritableDatabase();
 
     // upsert to backend conflict table
-    long conflictId = db.insertWithOnConflict(Tables.BACKEND_CONFLICTS, null, values,
-        SQLiteDatabase.CONFLICT_IGNORE);
+    long conflictId = db.insertWithOnConflict(Tables.BACKEND_CONFLICTS, null,
+        values, SQLiteDatabase.CONFLICT_IGNORE);
     String[] whereArgs = { values.getAsString(BackendConflictColumns.FILE_ID) };
     db.update(Tables.BACKEND_CONFLICTS, values, BackendConflictColumns.FILE_ID
         + "=?", whereArgs);
@@ -184,15 +188,16 @@ public class GenericDb extends SQLiteOpenHelper
     metadataVal.put(MetaDataColumns.CONFLICT, true);
     db.update(Tables.METADATA, metadataVal, MetaDataColumns.FILE_ID + "=?",
         whereArgs);
-    
+
     return conflictId;
   }
 
-  public int deleteAllUserFiles(String user)
+  public int deleteAllUserMetaData(String user)
   {
-    
+
     return 0;
   }
+
   // ---------------------------------------------------------------------------
 
   public void dumpDB()

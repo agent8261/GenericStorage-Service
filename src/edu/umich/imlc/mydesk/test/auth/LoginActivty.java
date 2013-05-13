@@ -4,6 +4,7 @@ import edu.umich.imlc.mydesk.cloud.android.auth.LoginCallback;
 import edu.umich.imlc.mydesk.cloud.android.auth.LoginUtilities;
 import edu.umich.imlc.mydesk.test.common.GenericContract;
 import edu.umich.imlc.mydesk.test.common.Utils;
+import edu.umich.imlc.mydesk.test.common.GenericContract.GenericURIs;
 import android.accounts.Account;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -81,18 +82,19 @@ public class LoginActivty extends Activity implements LoginCallback
   public void onSuccess(final String accountName)
   {
     Utils.printMethodName(TAG);
-    
-    //disable syncing for old account
+
+    // disable syncing for old account
     String oldAccountName = getSharedPrefs().getString(
         GenericContract.PREFS_ACCOUNT_NAME, null);
-    if(oldAccountName != null)
+    if( oldAccountName != null )
     {
-      Account oldAccount = new Account(oldAccountName, LoginUtilities.googleAccountType);
-      ContentResolver.setSyncAutomatically(oldAccount, GenericContract.AUTHORITY,
-          false);
+      Account oldAccount = new Account(oldAccountName,
+          LoginUtilities.googleAccountType);
+      ContentResolver.setSyncAutomatically(oldAccount,
+          GenericContract.AUTHORITY, false);
     }
-    
-    //enable syncing of new account
+
+    // enable syncing of new account
     getSharedPrefs().edit()
         .putString(GenericContract.PREFS_ACCOUNT_NAME, accountName).apply();
     Account account = new Account(accountName, LoginUtilities.googleAccountType);
@@ -100,6 +102,18 @@ public class LoginActivty extends Activity implements LoginCallback
         true);
     ContentResolver.addPeriodicSync(account, GenericContract.AUTHORITY,
         new Bundle(), 30 * 60);
+
+    // notify any running cursors / loaders to refresh
+    getApplicationContext().getContentResolver().notifyChange(
+        GenericURIs.URI_BASE, null, true);
+    getApplicationContext().getContentResolver().notifyChange(
+        GenericURIs.URI_FILES, null, true);
+    getApplicationContext().getContentResolver().notifyChange(
+        GenericURIs.URI_CURRENT_ACCOUNT, null, true);
+    getApplicationContext().getContentResolver().notifyChange(
+        GenericURIs.URI_BACKEND_CONFLICTS, null, true);
+    getApplicationContext().getContentResolver().notifyChange(
+        GenericURIs.URI_LOCAL_CONFLICTS, null, true);
     runOnUiThread(new Runnable()
     {
 
