@@ -1,7 +1,9 @@
 package edu.umich.imlc.mydesk.test.service;
 
 import java.io.File;
+import java.io.IOException;
 import java.text.DateFormat;
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
@@ -12,14 +14,19 @@ import java.util.Map;
 import edu.umich.imlc.mydesk.MyDeskProtocolBuffer.FileMetaData_PB;
 import edu.umich.imlc.mydesk.MyDeskProtocolBuffer.FileMetaData_ShortInfo_PB;
 import edu.umich.imlc.mydesk.cloud.android.auth.LoginTask;
+import edu.umich.imlc.mydesk.cloud.client.exceptions.FileNotFound;
+import edu.umich.imlc.mydesk.cloud.client.exceptions.NullOrEmptyField;
+import edu.umich.imlc.mydesk.cloud.client.exceptions.SystemException;
+import edu.umich.imlc.mydesk.cloud.client.exceptions.UserNotLoggedIn;
 import edu.umich.imlc.mydesk.cloud.client.network.NetworkOps;
 import edu.umich.imlc.mydesk.cloud.client.utilities.Util;
 import edu.umich.imlc.mydesk.test.common.GenericContract;
 import edu.umich.imlc.mydesk.test.common.GenericContract.BackendConflictColumns;
+import edu.umich.imlc.mydesk.test.common.GenericContract.BackendConflictInfo;
+import edu.umich.imlc.mydesk.test.common.GenericContract.BackendResolve;
 import edu.umich.imlc.mydesk.test.common.GenericContract.GenericURIs;
 import edu.umich.imlc.mydesk.test.common.GenericContract.MetaData;
 import edu.umich.imlc.mydesk.test.common.GenericContract.MetaDataColumns;
-import edu.umich.imlc.mydesk.test.common.GenericContract.MetaDataProjections;
 import edu.umich.imlc.mydesk.test.common.Utils;
 import edu.umich.imlc.protocolbuffer.general.ProtocolBufferTransport.Date_PB;
 
@@ -27,7 +34,6 @@ import android.accounts.Account;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
-import android.app.TaskStackBuilder;
 import android.content.AbstractThreadedSyncAdapter;
 import android.content.ContentProviderClient;
 import android.content.ContentProviderOperation;
@@ -41,6 +47,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.support.v4.app.NotificationCompat;
+import android.support.v4.app.TaskStackBuilder;
 import android.util.Log;
 
 public class GenericSyncService extends Service
@@ -175,7 +182,8 @@ public class GenericSyncService extends Service
             .doLogin();
 
         SyncTodos todos = new SyncTodos(getAndLockMetaDatas(account, provider),
-            NetworkOps.getListMetaData(), syncResult, account, mBuilder, getContext().getApplicationContext());
+            NetworkOps.getListMetaData(), syncResult, mBuilder, getContext()
+                .getApplicationContext());
 
         ArrayList<ContentProviderOperation> operationList = new ArrayList<ContentProviderOperation>();
 
@@ -233,7 +241,7 @@ public class GenericSyncService extends Service
           null, null, null);
       Cursor c = provider.query(GenericURIs.URI_FILES.buildUpon()
           .appendQueryParameter(MetaDataColumns.OWNER, account.name).build(),
-          MetaDataProjections.METADATA, null, null, null);
+          MetaDataColumns.METADATA_PROJ, null, null, null);
       try
       {
         Map<String, MetaData> result = new HashMap<String, GenericContract.MetaData>();
@@ -256,7 +264,6 @@ public class GenericSyncService extends Service
 
   private static class SyncTodos
   {
-    private final Account syncAccount;
     private ArrayList<MetaData> untouched;
     private ArrayList<MetaData> conflicts;
     private ArrayList<MetaData> toCreate;
@@ -266,13 +273,12 @@ public class GenericSyncService extends Service
     private SyncResult mSyncResult;
     private NotificationCompat.Builder mBuilder;
     private Context mContext;
-    
+
     public SyncTodos(Map<String, MetaData> local_,
         List<FileMetaData_ShortInfo_PB> backend, SyncResult syncResult_,
-        Account account_, NotificationCompat.Builder notBuilder_, Context c_)
+        NotificationCompat.Builder notBuilder_, Context c_)
     {
       Util.printMethodName(TAG);
-      syncAccount = account_;
       mSyncResult = syncResult_;
       mBuilder = notBuilder_;
       mContext = c_;
@@ -357,9 +363,10 @@ public class GenericSyncService extends Service
       {
         try
         {
-          updateSyncNotification(mContext, mBuilder, "Updating: " + m.fileName());
-          File newFile = new File(Utils.createRandomFileUri(mContext.getFilesDir())
-              .getPath());
+          updateSyncNotification(mContext, mBuilder,
+              "Updating: " + m.fileName());
+          File newFile = new File(Utils.createRandomFileUri(
+              mContext.getFilesDir()).getPath());
           FileMetaData_PB m_pb = NetworkOps.getFileMetaData(m.fileId());
           long newSeq = NetworkOps.getFile(m.fileId(), newFile);
           ContentProviderOperation.Builder b = ContentProviderOperation
@@ -397,11 +404,11 @@ public class GenericSyncService extends Service
       {
         try
         {
-          updateSyncNotification(mContext, mBuilder,
-              "Downloading new file: " + mShort.getFileName());
+          updateSyncNotification(mContext, mBuilder, "Downloading new file: "
+              + mShort.getFileName());
           FileMetaData_PB m = NetworkOps.getFileMetaData(mShort.getFileID());
-          File newFile = new File(Utils.createRandomFileUri(mContext.getFilesDir())
-              .getPath());
+          File newFile = new File(Utils.createRandomFileUri(
+              mContext.getFilesDir()).getPath());
           long newSeq = NetworkOps.getFile(m.getFileID(), newFile);
 
           ContentProviderOperation.Builder b = ContentProviderOperation
@@ -435,7 +442,8 @@ public class GenericSyncService extends Service
       {
         try
         {
-          updateSyncNotification(mContext, mBuilder, "Uploading new file: "+m.fileName());
+          updateSyncNotification(mContext, mBuilder,
+              "Uploading new file: " + m.fileName());
           FileMetaData_PB m_pb = NetworkOps.createFile(new File(m.fileUri()
               .getPath()), m.fileId(), m.fileName(), m.fileType());
           ContentProviderOperation.Builder b = ContentProviderOperation
@@ -485,20 +493,16 @@ public class GenericSyncService extends Service
       {
         try
         {
-          updateSyncNotification(mContext, mBuilder, "Uploading: "+m.fileName());
-          FileMetaData_PB m_pb = NetworkOps.overWriteFile(new File(m.fileUri()
-              .getPath()), m.fileId(), m.fileName(), m.fileType());
-          ContentProviderOperation.Builder b = ContentProviderOperation
-              .newUpdate(GenericURIs.URI_FILES
-                  .buildUpon()
-                  .appendPath(m.fileId())
-                  .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
-                      "true")
-                  .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
-                  .build());
-          b.withValue(MetaDataColumns.SEQUENCE, m_pb.getSequenceNumber());
-          b.withValue(MetaDataColumns.DIRTY, false);
-          operationList.add(b.build());
+          updateSyncNotification(mContext, mBuilder,
+              "Uploading: " + m.fileName());
+          Uri operationUri = GenericURIs.URI_FILES
+              .buildUpon()
+              .appendPath(m.fileId())
+              .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
+                  "true")
+              .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
+              .build();
+          operationList.add(doPush(operationUri, m));
         }
         catch( Exception e )
         {
@@ -508,6 +512,21 @@ public class GenericSyncService extends Service
       }
     }
 
+    private ContentProviderOperation doPush(Uri uri, MetaData m)
+        throws UserNotLoggedIn, SystemException, NullOrEmptyField,
+        FileNotFound, IOException
+    {
+      FileMetaData_PB m_pb = NetworkOps.overWriteFile(new File(m.fileUri()
+          .getPath()), m.fileId(), m.fileName(), m.fileType());
+      ContentProviderOperation.Builder b = ContentProviderOperation
+          .newUpdate(uri);
+      b.withValue(MetaDataColumns.SEQUENCE, m_pb.getSequenceNumber());
+      b.withValue(MetaDataColumns.DIRTY, false);
+      b.withValue(MetaDataColumns.CONFLICT, false);
+      b.withValue(MetaDataColumns.LOCKED, false);
+      return b.build();
+    }
+    
     public void addConflictOperations(
         ArrayList<ContentProviderOperation> operationList)
     {
@@ -524,7 +543,6 @@ public class GenericSyncService extends Service
                   .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
                       "true").build());
           b.withValue(BackendConflictColumns.FILE_ID, m.fileId())
-              .withValue(BackendConflictColumns.FILE_OWNER, syncAccount.name)
               .withValue(BackendConflictColumns.BACKEND_SEQUENCE,
                   m_pb.getSequenceNumber())
               .withValue(
@@ -539,6 +557,54 @@ public class GenericSyncService extends Service
           e.printStackTrace();
         }
       }
+    }
+
+    public void addResolveBackendConflictOperation(
+        ArrayList<ContentProviderOperation> operationList)
+    {
+      Util.printMethodName(TAG);
+      updateSyncNotification(mContext, mBuilder, "Resolving conflicts");
+      ArrayList<BackendConflictInfo> conflicts = getResolvedConflicts();
+      for( BackendConflictInfo bci : conflicts )
+      {
+        switch ( bci.resolved() )
+        {
+          case BACKEND:
+            break;
+          case LOCAL:
+            break;
+          case UNRESOLVED:
+          default:
+            break;
+
+        }
+      }
+    }
+
+    private ArrayList<BackendConflictInfo> getResolvedConflicts()
+    {
+      Cursor c = mContext.getContentResolver().query(
+          GenericURIs.URI_BACKEND_CONFLICTS,
+          BackendConflictColumns.BACKEND_CONFLICT_PROJ,
+          BackendConflictColumns.RESOLVED + "!=" + BackendResolve.UNRESOLVED,
+          null, null);
+      ArrayList<BackendConflictInfo> result = new ArrayList<GenericContract.BackendConflictInfo>();
+      if( c.moveToFirst() )
+      {
+        do
+        {
+          try
+          {
+            result.add(new BackendConflictInfo(c));
+          }
+          catch( ParseException e )
+          {
+            e.printStackTrace();
+          }
+        } while( c.moveToNext() );
+      }
+      c.close();
+      return result;
     }
   }
 }

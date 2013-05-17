@@ -34,8 +34,7 @@ public class GenericDb extends SQLiteOpenHelper
       + " INTEGER NOT NULL, " + LocalConflictColumns.FILE_ID
       + " TEXT NOT NULL UNIQUE, " + LocalConflictColumns.NEWFILE_URI
       + " TEXT NOT NULL, " + LocalConflictColumns.NEWFILE_TIMESTAMP
-      + " TEXT NOT NULL," + LocalConflictColumns.RESOLVED
-      + " TEXT DEFAULT NULL, " + "PRIMARY KEY(" + LocalConflictColumns.ID
+      + " TEXT NOT NULL," + "PRIMARY KEY(" + LocalConflictColumns.ID
       + "), FOREIGN KEY(" + LocalConflictColumns.FILE_ID + ") REFERENCES "
       + Tables.METADATA + "(" + MetaDataColumns.FILE_ID
       + ") ON DELETE CASCADE)";
@@ -43,11 +42,11 @@ public class GenericDb extends SQLiteOpenHelper
   private static final String CREATE_TABLE_BACKEND_CONFLICTS = "CREATE TABLE "
       + Tables.BACKEND_CONFLICTS + "(" + BackendConflictColumns.ID
       + " INTEGER NOT NULL, " + BackendConflictColumns.FILE_ID
-      + " TEXT NOT NULL, " + BackendConflictColumns.RESOLVED
-      + " TEXT DEFAULT NULL, " + " PRIMARY KEY(" + BackendConflictColumns.ID
-      + "), FOREIGN KEY(" + BackendConflictColumns.FILE_ID + ") REFERENCES "
-      + Tables.METADATA + "(" + MetaDataColumns.FILE_ID
-      + ") ON DELETE CASCADE)";
+      + " TEXT NOT NULL, " + BackendConflictColumns.RESOLVED + " TEXT DEFAULT "
+      + BackendResolve.UNRESOLVED.name() + ", " + " PRIMARY KEY("
+      + BackendConflictColumns.ID + "), FOREIGN KEY("
+      + BackendConflictColumns.FILE_ID + ") REFERENCES " + Tables.METADATA
+      + "(" + MetaDataColumns.FILE_ID + ") ON DELETE CASCADE)";
 
   // ---------------------------------------------------------------------------
   // ---------------------------------------------------------------------------
@@ -123,7 +122,7 @@ public class GenericDb extends SQLiteOpenHelper
     Utils.printMethodName(TAG);
     MetaData result = null;
     Cursor c = null;
-    if( (c = queryFile(fileId, MetaDataProjections.METADATA)) != null )
+    if( (c = queryFile(fileId, MetaDataColumns.METADATA_PROJ)) != null )
     {
       result = new MetaData(c);
       c.close();
@@ -190,12 +189,6 @@ public class GenericDb extends SQLiteOpenHelper
         whereArgs);
 
     return conflictId;
-  }
-
-  public int deleteAllUserMetaData(String user)
-  {
-
-    return 0;
   }
 
   // ---------------------------------------------------------------------------

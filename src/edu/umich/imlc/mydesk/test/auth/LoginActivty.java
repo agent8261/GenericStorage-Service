@@ -146,9 +146,9 @@ public class LoginActivty extends Activity implements LoginCallback
   private void showAccountVerified(String accountName)
   {
     Utils.printMethodName(TAG);
-    AlertDialog.Builder aBuilder = new AlertDialog.Builder(this);
-    aBuilder.setMessage("Account verified: " + accountName);
-    aBuilder.setOnDismissListener(new OnDismissListener()
+    AlertDialog alert  = new AlertDialog.Builder(this).create();
+    alert.setMessage("Account verified: " + accountName);
+    alert.setOnDismissListener(new OnDismissListener()
     {
       @Override
       public void onDismiss(DialogInterface dialog)
@@ -156,15 +156,15 @@ public class LoginActivty extends Activity implements LoginCallback
         finish();
       }
     });
-    aBuilder.create().show();
+    alert.show();
   }
 
   private void showVerifyFail(Throwable e)
   {
     Utils.printMethodName(TAG);
-    AlertDialog.Builder aBuilder = new AlertDialog.Builder(this);
-    aBuilder.setMessage("Verify failed: " + e);
-    aBuilder.setOnDismissListener(new OnDismissListener()
+    AlertDialog alert = new AlertDialog.Builder(this).create();
+    alert.setMessage("Verify failed: " + e);
+    alert.setOnDismissListener(new OnDismissListener()
     {
       @Override
       public void onDismiss(DialogInterface dialog)
@@ -172,6 +172,6 @@ public class LoginActivty extends Activity implements LoginCallback
         finish();
       }
     });
-    aBuilder.create().show();
+    alert.show();
   }
 }

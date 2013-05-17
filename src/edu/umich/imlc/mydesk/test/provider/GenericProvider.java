@@ -38,6 +38,8 @@ public class GenericProvider extends ContentProvider
   private static final int CURRENT_ACCOUNT = 110;
   private static final int BACKEND_CONFLICTS = 120;
   private static final int BACKEND_CONFLICT = 121;
+  private static final int LOCAL_CONFLICTS = 130;
+  private static final int LOCAL_CONFLICT = 131;
   private static final UriMatcher sURIMatcher = new UriMatcher(
       UriMatcher.NO_MATCH);
   static
@@ -50,6 +52,10 @@ public class GenericProvider extends ContentProvider
         BACKEND_CONFLICTS);
     sURIMatcher.addURI(GenericContract.AUTHORITY, "backend_conflicts/*",
         BACKEND_CONFLICT);
+    sURIMatcher.addURI(GenericContract.AUTHORITY, "local_conflicts",
+        LOCAL_CONFLICTS);
+    sURIMatcher.addURI(GenericContract.AUTHORITY, "local_conflicts/*",
+        LOCAL_CONFLICT);
   }
   private GenericDb genericDb;
   private SharedPreferences prefs;
@@ -68,13 +74,7 @@ public class GenericProvider extends ContentProvider
   public int delete(Uri arg0, String arg1, String[] arg2)
   {
     Utils.printMethodName(TAG);
-    // the only supported delete operation is deleting files not owned by the
-    // current user
-    genericDb.getWritableDatabase().beginTransaction();
-    String currentUser = getUser();
-    genericDb.getWritableDatabase().setTransactionSuccessful();
-    genericDb.getWritableDatabase().endTransaction();
-    return 0;
+    throw new UnsupportedOperationException("Delete not supported");
   }
 
   // ---------------------------------------------------------------------------
@@ -195,12 +195,45 @@ public class GenericProvider extends ContentProvider
         mc.newRow().add(getUser());
         c = mc;
         break;
+      case BACKEND_CONFLICTS:
+        c = getConflicts(uri, projection, selection, selectionArgs, sortOrder,
+            Tables.BACKEND_CONFLICTS);
+      case LOCAL_CONFLICTS:
+        c = getConflicts(uri, projection, selection, selectionArgs, sortOrder,
+            Tables.LOCAL_CONFLICTS);
       default:
         throw new IllegalArgumentException("Unknown URI: " + uri.toString());
     }
-
     c.setNotificationUri(getContext().getContentResolver(), uri);
     return c;
+  }
+
+  /**
+   * Returns a cursor containing entries in the specified conflicts table, owned
+   * by the specified user if the uri is appended with the query string "owner",
+   * otherwise the currently logged in account is used
+   * 
+   * @param uri
+   * @param projection
+   * @param selection
+   * @param selectionArgs
+   * @param sortOrder
+   * @return
+   */
+  private Cursor getConflicts(Uri uri, String[] projection, String selection,
+      String[] selectionArgs, String sortOrder, String conflictTable)
+  {
+    String owner = null;
+    owner = uri.getQueryParameter(MetaDataColumns.OWNER);
+    if( owner == null )
+    {
+      owner = getUser();
+    }
+    SQLiteQueryBuilder queryBuilder = new SQLiteQueryBuilder();
+    queryBuilder.setTables(conflictTable + " Natural JOIN " + Tables.METADATA);
+    queryBuilder.appendWhere(MetaDataColumns.OWNER + "='" + owner + "'");
+    return queryBuilder.query(genericDb.getReadableDatabase(), projection,
+        selection, selectionArgs, null, null, sortOrder);
   }
 
   // ---------------------------------------------------------------------------
@@ -252,6 +285,14 @@ public class GenericProvider extends ContentProvider
           return setLocks(uri.getQueryParameter(MetaDataColumns.OWNER), true);
         }
       }
+      case BACKEND_CONFLICT:
+      {
+        long conflictId = Long.valueOf(uri.getLastPathSegment());
+
+        // if success then update metadata and delete conflict. Otherwise don't
+        // touch metadata and update conflict
+      }
+      case LOCAL_CONFLICT:
       default:
         throw new UnsupportedOperationException("Unknown URI: "
             + uri.toString());
@@ -321,7 +362,6 @@ public class GenericProvider extends ContentProvider
       }
       else
       {
-
         // check for ownership
         String currentUser = getUser();
         if( currentUser.isEmpty() )
@@ -350,7 +390,7 @@ public class GenericProvider extends ContentProvider
 
       // prepare update values
       ContentValues updateValues = prepareMetaDataUpdate(Uri.fromFile(toFile),
-          newSeq, newTime);
+          newSeq, newTime, fromBackend);
 
       // attempt to save
       if( genericDb.updateFile(fileMetaData, updateValues) != 1 )
@@ -375,15 +415,16 @@ public class GenericProvider extends ContentProvider
   // ---------------------------------------------------------------------------
 
   ContentValues prepareMetaDataUpdate(Uri newUri, long newSequence,
-      String newTimestamp)
+      String newTimestamp, boolean fromBackend)
   {
     Utils.printMethodName(TAG);
     ContentValues v = new ContentValues();
-    v.put(MetaDataColumns.DIRTY, true);
+    v.put(MetaDataColumns.DIRTY, !fromBackend);
     v.put(MetaDataColumns.URI, newUri.toString());
     v.put(MetaDataColumns.SEQUENCE, newSequence);
     v.put(MetaDataColumns.TIME, newTimestamp);
     v.put(MetaDataColumns.LOCKED, false);
+    v.put(MetaDataColumns.CONFLICT, false);
     return v;
   }
 
@@ -491,7 +532,7 @@ public class GenericProvider extends ContentProvider
     copyFile(fromFile, toFile);
 
     ContentValues updateValues = prepareMetaDataUpdate(Uri.fromFile(toFile), 0,
-        GenericContract.INTERNAL_DATE_FORMAT.format(new Date()));
+        GenericContract.INTERNAL_DATE_FORMAT.format(new Date()), false);
 
     // update the metadata information
     genericDb.updateFile(file, updateValues);
