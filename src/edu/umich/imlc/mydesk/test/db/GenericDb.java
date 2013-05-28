@@ -1,5 +1,8 @@
 package edu.umich.imlc.mydesk.test.db;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import edu.umich.imlc.mydesk.test.common.GenericContract.*;
 import edu.umich.imlc.mydesk.test.common.Utils;
 import android.content.ContentValues;
@@ -42,6 +45,8 @@ public class GenericDb extends SQLiteOpenHelper
   private static final String CREATE_TABLE_BACKEND_CONFLICTS = "CREATE TABLE "
       + Tables.BACKEND_CONFLICTS + "(" + BackendConflictColumns.ID
       + " INTEGER NOT NULL, " + BackendConflictColumns.FILE_ID
+      + " TEXT NOT NULL, " + BackendConflictColumns.BACKEND_SEQUENCE
+      + " INTEGER NOT NULL, " + BackendConflictColumns.BACKEND_TIMESTAMP
       + " TEXT NOT NULL, " + BackendConflictColumns.RESOLVED + " TEXT DEFAULT "
       + BackendResolve.UNRESOLVED.name() + ", " + " PRIMARY KEY("
       + BackendConflictColumns.ID + "), FOREIGN KEY("
@@ -74,9 +79,11 @@ public class GenericDb extends SQLiteOpenHelper
   public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion)
   {
     Utils.printMethodName(TAG);
-    db.execSQL("DROP TABLE IF EXISTS " + Tables.METADATA);
-    db.execSQL("DROP TABLE IF EXISTS " + Tables.LOCAL_CONFLICTS);
-    onCreate(db);
+    if(oldVersion == 1 && newVersion == 2)
+    {
+      db.execSQL("DROP TABLE IF EXISTS " + Tables.BACKEND_CONFLICTS);
+      db.execSQL(CREATE_TABLE_BACKEND_CONFLICTS);
+    }
   }// onUpgrade
 
   // ---------------------------------------------------------------------------
@@ -114,6 +121,30 @@ public class GenericDb extends SQLiteOpenHelper
     }
     return result;
   }// getFileUri
+
+  // ---------------------------------------------------------------------------
+
+  public MetaData getFileMetaDataFromConflictId(long conflictId,
+      String conflictTable)
+  {
+    Utils.printMethodName(TAG);
+    SQLiteQueryBuilder queryBuilder = new SQLiteQueryBuilder();
+
+    queryBuilder.setTables(conflictTable + " JOIN " + Tables.METADATA + " ON "
+        + conflictTable + "." + MetaDataColumns.FILE_ID + "=" + Tables.METADATA
+        + "." + MetaDataColumns.FILE_ID);
+    queryBuilder.appendWhere(conflictTable + "." + MetaDataColumns.ID + "="
+        + conflictId);
+    Cursor c = queryBuilder.query(getWritableDatabase(),
+        MetaDataColumns.METADATA_PROJ, null, null, null, null, null);
+
+    MetaData result = null;
+    if( c.moveToFirst() )
+    {
+      result = new MetaData(c);
+    }
+    return result;
+  }
 
   // ---------------------------------------------------------------------------
 
@@ -169,6 +200,27 @@ public class GenericDb extends SQLiteOpenHelper
         MetaDataColumns.FILE_ID + "=?", whereArgs);
   }// newLocalConflict
 
+  public List<Uri> getAllFilesFor(MetaData m)
+  {
+    ArrayList<Uri> result = new ArrayList<Uri>();
+    result.add(m.fileUri());
+
+    SQLiteQueryBuilder queryBuilder = new SQLiteQueryBuilder();
+    queryBuilder.setTables(Tables.LOCAL_CONFLICTS);
+
+    String[] projectionIn = { LocalConflictColumns.NEWFILE_URI };
+    String[] selectionArgs = { m.fileId() };
+    Cursor c = queryBuilder.query(getWritableDatabase(), projectionIn,
+        LocalConflictColumns.FILE_ID + "=?", selectionArgs, null, null, null);
+    if( c.moveToFirst() )
+    {
+      do
+      {
+        result.add(Uri.parse(c.getString(0)));
+      } while( c.moveToNext() );
+    }
+    return result;
+  }
 
   public long newBackendConflict(ContentValues values)
   {
@@ -178,6 +230,18 @@ public class GenericDb extends SQLiteOpenHelper
     // upsert to backend conflict table
     long conflictId = db.insertWithOnConflict(Tables.BACKEND_CONFLICTS, null,
         values, SQLiteDatabase.CONFLICT_IGNORE);
+
+    updateBackendConflict(conflictId, values);
+
+    return conflictId;
+  }
+
+  // ---------------------------------------------------------------------------
+
+  public int updateBackendConflict(long conflictId, ContentValues values)
+  {
+    Utils.printMethodName(TAG);
+    SQLiteDatabase db = getWritableDatabase();
     String[] whereArgs = { values.getAsString(BackendConflictColumns.FILE_ID) };
     db.update(Tables.BACKEND_CONFLICTS, values, BackendConflictColumns.FILE_ID
         + "=?", whereArgs);
@@ -185,10 +249,8 @@ public class GenericDb extends SQLiteOpenHelper
     // flag file metadata as conflicted
     ContentValues metadataVal = new ContentValues();
     metadataVal.put(MetaDataColumns.CONFLICT, true);
-    db.update(Tables.METADATA, metadataVal, MetaDataColumns.FILE_ID + "=?",
-        whereArgs);
-
-    return conflictId;
+    return db.update(Tables.METADATA, metadataVal, MetaDataColumns.FILE_ID
+        + "=?", whereArgs);
   }
 
   // ---------------------------------------------------------------------------

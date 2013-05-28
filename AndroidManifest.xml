@@ -4,7 +4,7 @@
     android:versionName="1.0" >
 
     <uses-sdk
-        android:minSdkVersion="11" android:targetSdkVersion="17"/>
+        android:minSdkVersion="10" android:targetSdkVersion="17"/>
 
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.USE_CREDENTIALS" />
@@ -23,7 +23,7 @@
             android:authorities="edu.umich.imlc.mydesk.test.service.provider" android:exported="true">
         </provider>
 
-        <activity android:name="ConflictActivity" >
+        <activity android:name="ConflictActivity">
         </activity>
         <activity
             android:name="edu.umich.imlc.mydesk.test.auth.LoginActivty"

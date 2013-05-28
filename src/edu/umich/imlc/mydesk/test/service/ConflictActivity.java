@@ -1,11 +1,15 @@
 package edu.umich.imlc.mydesk.test.service;
 
-import android.app.Activity;
+import android.os.Bundle;
+import android.support.v4.app.FragmentActivity;
 
-public class ConflictActivity extends Activity
+public class ConflictActivity extends FragmentActivity
 {
 
-  public ConflictActivity()
+  @Override
+  protected void onCreate(Bundle savedInstanceState)
   {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.conflict_activity_layout);
   }
 }

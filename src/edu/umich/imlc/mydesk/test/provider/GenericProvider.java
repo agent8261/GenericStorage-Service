@@ -5,13 +5,16 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.ObjectInputStream.GetField;
 import java.nio.channels.FileChannel;
 import java.util.Date;
+import java.util.List;
 import java.util.UUID;
 
 import edu.umich.imlc.mydesk.test.common.GenericContract;
 import edu.umich.imlc.mydesk.test.common.GenericContract.GenericURIs;
 import edu.umich.imlc.mydesk.test.common.GenericContract.MetaDataColumns;
+import edu.umich.imlc.mydesk.test.common.GenericContract.Tables;
 import edu.umich.imlc.mydesk.test.common.Utils;
 import edu.umich.imlc.mydesk.test.db.GenericDb;
 import edu.umich.imlc.mydesk.test.service.GenericSyncService;
@@ -71,10 +74,31 @@ public class GenericProvider extends ContentProvider
   // ---------------------------------------------------------------------------
 
   @Override
-  public int delete(Uri arg0, String arg1, String[] arg2)
+  public int delete(Uri uri, String selection, String[] selectionArgs)
   {
     Utils.printMethodName(TAG);
-    throw new UnsupportedOperationException("Delete not supported");
+    switch ( sURIMatcher.match(uri) )
+    {
+      case FILE:
+        MetaData m = genericDb.getFileMetaData(uri.getLastPathSegment());
+        List<Uri> uris = genericDb.getAllFilesFor(m);
+
+        // delete entry for the metadata table, this will cascade to the
+        // conflict tables
+        String[] whereArgs = { m.fileId() };
+        genericDb.getWritableDatabase().delete(Tables.METADATA,
+            MetaDataColumns.FILE_ID + "=?", whereArgs);
+        for( Uri u : uris )
+        {
+          File f = new File(u.getPath());
+          f.delete();
+        }
+        getContext().getContentResolver().notifyChange(uri, null,
+            !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri));
+        return 1;
+      default:
+        throw new IllegalArgumentException("Invalid URI: " + uri.toString());
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -198,9 +222,11 @@ public class GenericProvider extends ContentProvider
       case BACKEND_CONFLICTS:
         c = getConflicts(uri, projection, selection, selectionArgs, sortOrder,
             Tables.BACKEND_CONFLICTS);
+        break;
       case LOCAL_CONFLICTS:
         c = getConflicts(uri, projection, selection, selectionArgs, sortOrder,
             Tables.LOCAL_CONFLICTS);
+        break;
       default:
         throw new IllegalArgumentException("Unknown URI: " + uri.toString());
     }
@@ -230,7 +256,10 @@ public class GenericProvider extends ContentProvider
       owner = getUser();
     }
     SQLiteQueryBuilder queryBuilder = new SQLiteQueryBuilder();
-    queryBuilder.setTables(conflictTable + " Natural JOIN " + Tables.METADATA);
+    queryBuilder.setTables(conflictTable + " AS " + conflictTable + " JOIN "
+        + Tables.METADATA + " AS " + Tables.METADATA + " ON " + conflictTable
+        + "." + MetaDataColumns.FILE_ID + "=" + Tables.METADATA + "."
+        + MetaDataColumns.FILE_ID);
     queryBuilder.appendWhere(MetaDataColumns.OWNER + "='" + owner + "'");
     return queryBuilder.query(genericDb.getReadableDatabase(), projection,
         selection, selectionArgs, null, null, sortOrder);
@@ -246,19 +275,23 @@ public class GenericProvider extends ContentProvider
     switch ( sURIMatcher.match(uri) )
     {
       case FILE:
-        if( testQueryParam(GenericContract.UNLOCK_FILE, uri) )
+        if( testQueryParam(GenericContract.UPDATE_METADATA, uri) )
         {
-          return updateAndSetLock(uri.getLastPathSegment(), false, values);
+          // update doesn't touch the actual file
+          return updateMetaDataOnly(
+              genericDb.getFileMetaData(uri.getLastPathSegment()), values);
         }
-        if( testQueryParam(GenericContract.LOCK_FILE, uri) )
-        {
-          return updateAndSetLock(uri.getLastPathSegment(), true, values);
-        }
-        // no special flag set in uri
+        genericDb.getWritableDatabase().beginTransaction();
         try
         {
-          genericDb.getWritableDatabase().beginTransaction();
-          boolean conflict = save(uri, values);
+          // remember the old file and check if it exists
+          MetaData fileMetaData;
+          if( (fileMetaData = genericDb.getFileMetaData(uri
+              .getLastPathSegment())) == null )
+          {
+            throw new IllegalArgumentException("file id doesn't exist");
+          }
+          boolean conflict = save(uri, values, fileMetaData);
           genericDb.getWritableDatabase().setTransactionSuccessful();
           getContext().getContentResolver().notifyChange(uri, null,
               !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri));
@@ -276,21 +309,75 @@ public class GenericProvider extends ContentProvider
         }
       case FILES:
       {
-        if( testQueryParam(GenericContract.UNLOCK_FILE, uri) )
+        if( testQueryParam(GenericContract.UNLOCK_FILES, uri) )
         {
           return setLocks(uri.getQueryParameter(MetaDataColumns.OWNER), false);
         }
-        if( testQueryParam(GenericContract.LOCK_FILE, uri) )
+        if( testQueryParam(GenericContract.LOCK_FILES, uri) )
         {
           return setLocks(uri.getQueryParameter(MetaDataColumns.OWNER), true);
         }
       }
       case BACKEND_CONFLICT:
       {
+        genericDb.getWritableDatabase().beginTransaction();
         long conflictId = Long.valueOf(uri.getLastPathSegment());
+        try
+        {
+          MetaData m = null;
+          if( (m = genericDb.getFileMetaDataFromConflictId(conflictId,
+              Tables.BACKEND_CONFLICTS)) != null )
+          {
+            if( !testQueryParam(GenericContract.UPDATE_METADATA, uri) )
+            {
+              // either keep backend successful, or it's an update to the
+              // conflict table
+              if( values.containsKey(BackendConflictColumns.BACKEND_SEQUENCE) )
+              {
+                // update conflict table
+                int result = genericDb
+                    .updateBackendConflict(conflictId, values);
+                if( result == 1 )
+                {
+                  genericDb.getWritableDatabase().setTransactionSuccessful();
+                }
+                getContext().getContentResolver()
+                    .notifyChange(
+                        uri,
+                        null,
+                        !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER,
+                            uri));
+                return result;
+              }
+              // keep backend success
+              if( save(uri, values, m) )
+              {
+                GenericSyncService.displayConflictNotification(getContext()
+                    .getApplicationContext());
+              }
+            }
+            else
+            {
+              // keep local success
+              updateMetaDataOnly(m, values);
+            }
+          }
+          // conflict resolution successful, delete entry
+          int result = genericDb.getWritableDatabase().delete(
+              Tables.BACKEND_CONFLICTS,
+              BackendConflictColumns.ID + "=" + conflictId, null);
 
-        // if success then update metadata and delete conflict. Otherwise don't
-        // touch metadata and update conflict
+          getContext().getContentResolver().notifyChange(uri, null,
+              !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri));
+          getContext().getContentResolver().notifyChange(GenericURIs.URI_FILES,
+              null,
+              !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri));
+          return result;
+        }
+        finally
+        {
+          genericDb.getWritableDatabase().endTransaction();
+        }
       }
       case LOCAL_CONFLICT:
       default:
@@ -298,6 +385,14 @@ public class GenericProvider extends ContentProvider
             + uri.toString());
     }
   }// update
+
+  // ---------------------------------------------------------------------------
+
+  private int updateMetaDataOnly(MetaData m, ContentValues values)
+  {
+    values.remove(MetaDataColumns.URI);
+    return genericDb.updateFile(m, values);
+  }
 
   // ---------------------------------------------------------------------------
 
@@ -314,29 +409,14 @@ public class GenericProvider extends ContentProvider
 
   // ---------------------------------------------------------------------------
 
-  private int updateAndSetLock(String fileId, boolean locked,
-      ContentValues values)
-  {
-    Utils.printMethodName(TAG);
-    values.put(MetaDataColumns.LOCKED, locked);
-    return genericDb.updateFile(genericDb.getFileMetaData(fileId), values);
-  }// setLock
-
-  // ---------------------------------------------------------------------------
-
-  private boolean save(Uri uri, ContentValues values)
+  private boolean save(Uri uri, ContentValues values, MetaData fileMetaData)
   {
     Utils.printMethodName(TAG);
     try
     {
-      // remember the old file and check if it exists
-      MetaData fileMetaData;
-      if( (fileMetaData = genericDb.getFileMetaData(uri.getLastPathSegment())) == null )
-      {
-        throw new IllegalArgumentException("file id doesn't exist");
-      }
-      if( fileMetaData.locked()
-          && !testQueryParam(GenericContract.CALLER_IS_SYNC_ADAPTER, uri) )
+      boolean fromBackend = testQueryParam(
+          GenericContract.CALLER_IS_SYNC_ADAPTER, uri);
+      if( fileMetaData.locked() && !fromBackend )
       {
         // file is locked and someone other than the sync adapter is trying to
         // access it
@@ -349,8 +429,6 @@ public class GenericProvider extends ContentProvider
       File toFile = null;
       long newSeq;
       String newTime;
-      boolean fromBackend = testQueryParam(
-          GenericContract.CALLER_IS_SYNC_ADAPTER, uri);
       if( fromBackend )
       {
         // new file already in internal storage

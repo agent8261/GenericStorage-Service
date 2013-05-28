@@ -16,7 +16,10 @@ import edu.umich.imlc.mydesk.MyDeskProtocolBuffer.FileMetaData_ShortInfo_PB;
 import edu.umich.imlc.mydesk.cloud.android.auth.LoginTask;
 import edu.umich.imlc.mydesk.cloud.client.exceptions.FileNotFound;
 import edu.umich.imlc.mydesk.cloud.client.exceptions.NullOrEmptyField;
+import edu.umich.imlc.mydesk.cloud.client.exceptions.NullOrEmptyID;
+import edu.umich.imlc.mydesk.cloud.client.exceptions.SequenceMismatch;
 import edu.umich.imlc.mydesk.cloud.client.exceptions.SystemException;
+import edu.umich.imlc.mydesk.cloud.client.exceptions.UserHasNoMyDeskAccount;
 import edu.umich.imlc.mydesk.cloud.client.exceptions.UserNotLoggedIn;
 import edu.umich.imlc.mydesk.cloud.client.network.NetworkOps;
 import edu.umich.imlc.mydesk.cloud.client.utilities.Util;
@@ -171,7 +174,7 @@ public class GenericSyncService extends Service
             + " is not the currently logged in account");
         ContentResolver.setSyncAutomatically(account,
             GenericContract.AUTHORITY, false);
-        Log.d(TAG, "Sync finsihed for " + account.name);
+        Log.d(TAG, "Sync finished for " + account.name);
         return;
       }
       NotificationCompat.Builder mBuilder = displaySyncNotification(getContext()
@@ -191,6 +194,10 @@ public class GenericSyncService extends Service
         provider.applyBatch(operationList);
         operationList.clear();
 
+        todos.addDeleteOperations(operationList);
+        provider.applyBatch(operationList);
+        operationList.clear();
+
         todos.addPullOperations(operationList);
         provider.applyBatch(operationList);
         operationList.clear();
@@ -207,6 +214,10 @@ public class GenericSyncService extends Service
         provider.applyBatch(operationList);
         operationList.clear();
 
+        todos.addResolveBackendConflictOperation(operationList);
+        provider.applyBatch(operationList);
+        operationList.clear();
+        
         todos.addConflictOperations(operationList);
         provider.applyBatch(operationList);
         operationList.clear();
@@ -214,7 +225,7 @@ public class GenericSyncService extends Service
         provider.update(
             GenericURIs.URI_FILES.buildUpon()
                 .appendQueryParameter(MetaDataColumns.OWNER, account.name)
-                .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
+                .appendQueryParameter(GenericContract.UNLOCK_FILES, "true")
                 .build(), null, null, null);
       }
       catch( Exception e )
@@ -234,11 +245,12 @@ public class GenericSyncService extends Service
         ContentProviderClient provider) throws RemoteException
     {
       Util.printMethodName(TAG);
-      provider.update(
-          GenericURIs.URI_FILES.buildUpon()
-              .appendQueryParameter(MetaDataColumns.OWNER, account.name)
-              .appendQueryParameter(GenericContract.LOCK_FILE, "true").build(),
-          null, null, null);
+      provider
+          .update(
+              GenericURIs.URI_FILES.buildUpon()
+                  .appendQueryParameter(MetaDataColumns.OWNER, account.name)
+                  .appendQueryParameter(GenericContract.LOCK_FILES, "true")
+                  .build(), null, null, null);
       Cursor c = provider.query(GenericURIs.URI_FILES.buildUpon()
           .appendQueryParameter(MetaDataColumns.OWNER, account.name).build(),
           MetaDataColumns.METADATA_PROJ, null, null, null);
@@ -269,6 +281,7 @@ public class GenericSyncService extends Service
     private ArrayList<MetaData> toCreate;
     private ArrayList<MetaData> toPush;
     private ArrayList<MetaData> toPull;
+    private ArrayList<MetaData> toDelete;
     private ArrayList<FileMetaData_ShortInfo_PB> newFiles;
     private SyncResult mSyncResult;
     private NotificationCompat.Builder mBuilder;
@@ -284,11 +297,12 @@ public class GenericSyncService extends Service
       mContext = c_;
       Log.d(TAG, "local:\n" + local_);
       Log.d(TAG, "Backend:\n" + backend);
-      untouched = new ArrayList<GenericContract.MetaData>();
-      conflicts = new ArrayList<GenericContract.MetaData>();
-      toCreate = new ArrayList<GenericContract.MetaData>();
-      toPush = new ArrayList<GenericContract.MetaData>();
+      untouched = new ArrayList<MetaData>();
+      conflicts = new ArrayList<MetaData>();
+      toCreate = new ArrayList<MetaData>();
+      toPush = new ArrayList<MetaData>();
       toPull = new ArrayList<MetaData>();
+      toDelete = new ArrayList<MetaData>();
       newFiles = new ArrayList<FileMetaData_ShortInfo_PB>();
       for( FileMetaData_ShortInfo_PB b : backend )
       {
@@ -334,14 +348,26 @@ public class GenericSyncService extends Service
       }
 
       // any files remaining means that they don't exist on the backend, so
-      // conflict is impossible, but exclude them when there is a local
-      // conflict.
+      // conflict is impossible and the case boils down to wether or not the
+      // files should be created on the backend or deleted locally.
       for( MetaData m : local_.values() )
       {
         ++mSyncResult.stats.numEntries;
-        if( m.dirty() && !m.conflict() )
+        if( m.sequenceNumber() == 0 && m.dirty() )
         {
-          toCreate.add(m);
+          // doesn't exist on backend because it's new
+          if( !m.conflict() )
+          {
+            toCreate.add(m);
+          }
+          continue;
+        }
+        if( m.sequenceNumber() <= 0 )
+        {
+          // doesn't exist on backend because it's been deleted, cascade the
+          // delete
+          ++mSyncResult.stats.numDeletes;
+          toDelete.add(m);
           continue;
         }
         untouched.add(m);
@@ -352,6 +378,7 @@ public class GenericSyncService extends Service
       Log.d(TAG, "toPush:\n" + toPush);
       Log.d(TAG, "toPull:\n" + toPull);
       Log.d(TAG, "newFiles:\n" + newFiles);
+      Log.d(TAG, "toDelete:\n" + toDelete);
       Log.d(TAG, "untouched:\n" + untouched);
     }
 
@@ -365,25 +392,12 @@ public class GenericSyncService extends Service
         {
           updateSyncNotification(mContext, mBuilder,
               "Updating: " + m.fileName());
-          File newFile = new File(Utils.createRandomFileUri(
-              mContext.getFilesDir()).getPath());
-          FileMetaData_PB m_pb = NetworkOps.getFileMetaData(m.fileId());
-          long newSeq = NetworkOps.getFile(m.fileId(), newFile);
-          ContentProviderOperation.Builder b = ContentProviderOperation
-              .newUpdate(GenericURIs.URI_FILES
-                  .buildUpon()
-                  .appendPath(m.fileId())
-                  .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
-                      "true").build());
-          b.withValue(GenericContract.KEY_NEW_FILE, newFile.toString())
-              .withValue(GenericContract.KEY_UPDATE_OLD_SEQUENCE,
-                  m.sequenceNumber())
-              .withValue(MetaDataColumns.SEQUENCE, newSeq)
-              .withValue(
-                  MetaDataColumns.TIME,
-                  DateFormat.getDateTimeInstance().format(
-                      translateDate(m_pb.getLastUpdated())));
-          operationList.add(b.build());
+          Uri uri = GenericURIs.URI_FILES
+              .buildUpon()
+              .appendPath(m.fileId())
+              .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
+                  "true").build();
+          operationList.add(doPull(uri, m).build());
         }
         catch( Exception e )
         {
@@ -391,6 +405,27 @@ public class GenericSyncService extends Service
           e.printStackTrace();
         }
       }
+    }
+
+    public ContentProviderOperation.Builder doPull(Uri uri, MetaData m)
+        throws UserNotLoggedIn, SystemException, NullOrEmptyField,
+        NullOrEmptyID, FileNotFound, UserHasNoMyDeskAccount, IOException
+    {
+      File newFile = new File(Utils.createRandomFileUri(mContext.getFilesDir())
+          .getPath());
+      FileMetaData_PB m_pb = NetworkOps.getFileMetaData(m.fileId());
+      long newSeq = NetworkOps.getFile(m.fileId(), newFile);
+      ContentProviderOperation.Builder b = ContentProviderOperation
+          .newUpdate(uri);
+      b.withValue(GenericContract.KEY_NEW_FILE, newFile.toString())
+          .withValue(GenericContract.KEY_UPDATE_OLD_SEQUENCE,
+              m.sequenceNumber())
+          .withValue(MetaDataColumns.SEQUENCE, newSeq)
+          .withValue(
+              MetaDataColumns.TIME,
+              DateFormat.getDateTimeInstance().format(
+                  translateDate(m_pb.getLastUpdated())));
+      return b;
     }
 
     public void addNewFilesOperations(
@@ -434,6 +469,24 @@ public class GenericSyncService extends Service
       }
     }
 
+    public void addDeleteOperations(
+        ArrayList<ContentProviderOperation> operationList)
+    {
+      Util.printMethodName(TAG);
+      for( MetaData m : toDelete )
+      {
+        updateSyncNotification(mContext, mBuilder, "Deleting: " + m.fileName());
+        ContentProviderOperation.Builder b = ContentProviderOperation
+            .newDelete(GenericURIs.URI_FILES
+                .buildUpon()
+                .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
+                    "true").build());
+        String[] selectionArgs = { m.fileId() };
+        b.withSelection(MetaDataColumns.FILE_ID + "=?", selectionArgs);
+        operationList.add(b.build());
+      }
+    }
+
     public void addcreateOperations(
         ArrayList<ContentProviderOperation> operationList)
     {
@@ -452,10 +505,12 @@ public class GenericSyncService extends Service
                   .appendPath(m.fileId())
                   .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
                       "true")
-                  .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
+                  .appendQueryParameter(GenericContract.UPDATE_METADATA, "true")
                   .build());
           b.withValue(MetaDataColumns.SEQUENCE, m_pb.getSequenceNumber());
           b.withValue(MetaDataColumns.DIRTY, false);
+          b.withValue(MetaDataColumns.CONFLICT, false);
+          b.withValue(MetaDataColumns.LOCKED, false);
           operationList.add(b.build());
         }
         catch( Exception e )
@@ -478,9 +533,10 @@ public class GenericSyncService extends Service
                 .appendPath(m.fileId())
                 .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
                     "true")
-                .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
+                .appendQueryParameter(GenericContract.UPDATE_METADATA, "true")
                 .build());
-        b.withValue(MetaDataColumns.SEQUENCE, m.sequenceNumber());
+        b.withValue(MetaDataColumns.CONFLICT, false);
+        b.withValue(MetaDataColumns.LOCKED, false);
         operationList.add(b.build());
       }
     }
@@ -495,14 +551,51 @@ public class GenericSyncService extends Service
         {
           updateSyncNotification(mContext, mBuilder,
               "Uploading: " + m.fileName());
+          // do one more check to make sure that there is no conflict
+          long backendSeq = NetworkOps.getFileMetaData(m.fileId())
+              .getSequenceNumber();
+          if( m.sequenceNumber() <= backendSeq )
+          {
+            // sequence number has changed since last checked and is now
+            // conflicted, put this file on the conflicts list and continue
+            conflicts.add(m);
+            continue;
+          }
           Uri operationUri = GenericURIs.URI_FILES
               .buildUpon()
               .appendPath(m.fileId())
               .appendQueryParameter(GenericContract.CALLER_IS_SYNC_ADAPTER,
                   "true")
-              .appendQueryParameter(GenericContract.UNLOCK_FILE, "true")
+              .appendQueryParameter(GenericContract.UPDATE_METADATA, "true")
               .build();
-          operationList.add(doPush(operationUri, m));
+          ContentProviderOperation.Builder b = null;
+          while( b == null )
+          {
+            try
+            {
+              b = doPush(operationUri, m, backendSeq);
+            }
+            catch( SequenceMismatch SM )
+            {
+              // backend sequence changed again, see if it's still possible to
+              // push
+              backendSeq = NetworkOps.getFileMetaData(m.fileId())
+                  .getSequenceNumber();
+              if( m.sequenceNumber() <= backendSeq )
+              {
+                // sequence number has changed since last checked and is now
+                // conflicted, put this file on the conflicts list
+                conflicts.add(m);
+                break;
+              }
+            }
+          }
+          if( b == null )
+          {
+            // conflict
+            continue;
+          }
+          operationList.add(b.build());
         }
         catch( Exception e )
         {
@@ -512,21 +605,21 @@ public class GenericSyncService extends Service
       }
     }
 
-    private ContentProviderOperation doPush(Uri uri, MetaData m)
-        throws UserNotLoggedIn, SystemException, NullOrEmptyField,
-        FileNotFound, IOException
+    private ContentProviderOperation.Builder doPush(Uri uri, MetaData m,
+        long expectedSeq) throws UserNotLoggedIn, SystemException,
+        NullOrEmptyField, FileNotFound, IOException, SequenceMismatch
     {
       FileMetaData_PB m_pb = NetworkOps.overWriteFile(new File(m.fileUri()
-          .getPath()), m.fileId(), m.fileName(), m.fileType());
+          .getPath()), m.fileId(), m.fileName(), m.fileType(), expectedSeq);
       ContentProviderOperation.Builder b = ContentProviderOperation
           .newUpdate(uri);
       b.withValue(MetaDataColumns.SEQUENCE, m_pb.getSequenceNumber());
       b.withValue(MetaDataColumns.DIRTY, false);
       b.withValue(MetaDataColumns.CONFLICT, false);
       b.withValue(MetaDataColumns.LOCKED, false);
-      return b.build();
+      return b;
     }
-    
+
     public void addConflictOperations(
         ArrayList<ContentProviderOperation> operationList)
     {
@@ -567,26 +660,84 @@ public class GenericSyncService extends Service
       ArrayList<BackendConflictInfo> conflicts = getResolvedConflicts();
       for( BackendConflictInfo bci : conflicts )
       {
-        switch ( bci.resolved() )
+        try
         {
-          case BACKEND:
-            break;
-          case LOCAL:
-            break;
-          case UNRESOLVED:
-          default:
-            break;
-
+          ContentProviderOperation.Builder b = null;
+          MetaData m = getMetaData(bci.fileId());
+          switch ( bci.resolved() )
+          {
+            case BACKEND:
+              // choose to keep backend file, this can never cause any further
+              // backend conflict conflict
+              b = doPull(
+                  GenericURIs.URI_BACKEND_CONFLICTS
+                      .buildUpon()
+                      .appendPath(String.valueOf(bci.id()))
+                      .appendQueryParameter(
+                          GenericContract.CALLER_IS_SYNC_ADAPTER, "true")
+                      .build(), m);
+              break;
+            case LOCAL:
+              // choose to keep local file, this will cause further conflict if
+              // the expected sequence number of the backend has changed
+              try
+              {
+                b = doPush(
+                    GenericURIs.URI_BACKEND_CONFLICTS
+                        .buildUpon()
+                        .appendPath(String.valueOf(bci.id()))
+                        .appendQueryParameter(
+                            GenericContract.CALLER_IS_SYNC_ADAPTER, "true")
+                        .appendQueryParameter(GenericContract.UPDATE_METADATA,
+                            "true").build(), m, bci.backendSequence());
+              }
+              catch( SequenceMismatch SM )
+              {
+                // sequence number has changed, we need to ask the user again so
+                // update the conflict information
+                FileMetaData_PB backendFile = NetworkOps.getFileMetaData(m
+                    .fileId());
+                b = ContentProviderOperation
+                    .newUpdate(GenericURIs.URI_BACKEND_CONFLICTS
+                        .buildUpon()
+                        .appendPath(String.valueOf(bci.id()))
+                        .appendQueryParameter(
+                            GenericContract.CALLER_IS_SYNC_ADAPTER, "true")
+                        .build());
+                b.withValue(BackendConflictColumns.BACKEND_SEQUENCE,
+                    backendFile.getSequenceNumber());
+                b.withValue(BackendConflictColumns.BACKEND_TIMESTAMP,
+                    GenericContract.INTERNAL_DATE_FORMAT
+                        .format(translateDate(backendFile.getLastUpdated())));
+                b.withValue(BackendConflictColumns.RESOLVED,
+                    BackendResolve.UNRESOLVED.name());
+              }
+              break;
+            case UNRESOLVED:
+              // should never reach here
+            default:
+              continue;
+          }
+          if( b != null )
+          {
+            operationList.add(b.build());
+          }
+        }
+        catch( Exception e )
+        {
+          ++mSyncResult.stats.numIoExceptions;
+          e.printStackTrace();
         }
       }
     }
 
     private ArrayList<BackendConflictInfo> getResolvedConflicts()
     {
+      Util.printMethodName(TAG);
       Cursor c = mContext.getContentResolver().query(
           GenericURIs.URI_BACKEND_CONFLICTS,
           BackendConflictColumns.BACKEND_CONFLICT_PROJ,
-          BackendConflictColumns.RESOLVED + "!=" + BackendResolve.UNRESOLVED,
+          BackendConflictColumns.RESOLVED + "!='" + BackendResolve.UNRESOLVED+"'",
           null, null);
       ArrayList<BackendConflictInfo> result = new ArrayList<GenericContract.BackendConflictInfo>();
       if( c.moveToFirst() )
@@ -605,6 +756,26 @@ public class GenericSyncService extends Service
       }
       c.close();
       return result;
+    }
+
+    private MetaData getMetaData(String fileId)
+    {
+      Utils.printMethodName(TAG);
+      String[] whereArgs = { fileId };
+      Cursor c = mContext.getContentResolver().query(
+          Uri.withAppendedPath(GenericURIs.URI_FILES, fileId),
+          MetaDataColumns.METADATA_PROJ, MetaDataColumns.FILE_ID + "=?",
+          whereArgs, null);
+      try
+      {
+        if( !c.moveToFirst() )
+          return null;
+        return new MetaData(c);
+      }
+      finally
+      {
+        c.close();
+      }
     }
   }
 }
